@@ -374,6 +374,8 @@ class _AuthScaffold extends StatefulWidget {
 }
 
 class _AuthScaffoldState extends State<_AuthScaffold> {
+  static const _stageWidth = 1440.0;
+
   bool? _wide;
   bool _settled = false;
   @override
@@ -382,36 +384,37 @@ class _AuthScaffoldState extends State<_AuthScaffold> {
       backgroundColor: XcColors.of(context).page,
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 900;
+          final width = constraints.maxWidth;
+          final wide = width >= 900;
           _settled |= _wide != null && _wide != wide;
           _wide = wide;
           final content = SafeArea(
             child: Center(
-              child: widget.builder(
-                context,
-                wide,
-                XcSpace.gutterOf(constraints.maxWidth),
-              ),
+              child: widget.builder(context, wide, XcSpace.gutterOf(width)),
             ),
           );
+          final margin = width > _stageWidth ? (width - _stageWidth) / 2 : 0.0;
           return XcEntranceSettled(
             settled: _settled,
             child: wide
                 ? Row(
                     children: [
-                      Expanded(
-                        flex: 5,
+                      SizedBox(
+                        width: margin + (width - 2 * margin) * 5 / 11,
                         child: _BrandPanel(
                           displayName: widget.displayName,
                           showcase: widget.showcase,
+                          inset: margin,
                         ),
                       ),
                       Expanded(
-                        flex: 6,
                         child: Stack(
                           children: [
                             const Positioned.fill(child: _Aurora(subtle: true)),
-                            content,
+                            Padding(
+                              padding: EdgeInsetsDirectional.only(end: margin),
+                              child: content,
+                            ),
                           ],
                         ),
                       ),
@@ -440,6 +443,7 @@ class XcLaunchView extends StatefulWidget {
   /// single state, with its clock and motion, across the handover.
   static final handoff = GlobalKey(debugLabel: 'xc-launch');
 
+  /// Counted while no route, such as the first-run disclaimer, covers it.
   static const slowAfter = Duration(seconds: 4);
 
   @override
@@ -451,11 +455,16 @@ class _XcLaunchViewState extends State<XcLaunchView> {
   bool _slow = false;
 
   @override
-  void initState() {
-    super.initState();
-    _slowTimer = Timer(XcLaunchView.slowAfter, () {
-      if (mounted) setState(() => _slow = true);
-    });
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (ModalRoute.isCurrentOf(context) == false) {
+      _slowTimer?.cancel();
+      _slowTimer = null;
+    } else if (!_slow) {
+      _slowTimer ??= Timer(XcLaunchView.slowAfter, () {
+        if (mounted) setState(() => _slow = true);
+      });
+    }
   }
 
   @override
@@ -613,9 +622,14 @@ class _TrustLine extends StatelessWidget {
 }
 
 class _BrandPanel extends StatelessWidget {
-  const _BrandPanel({required this.displayName, required this.showcase});
+  const _BrandPanel({
+    required this.displayName,
+    required this.showcase,
+    required this.inset,
+  });
   final String displayName;
   final bool showcase;
+  final double inset;
   static const _features = [
     (AppGlyphs.bolt, '一键连接', '登录后点一下，即可开启加密连接'),
     (AppGlyphs.cloudSync, '节点自动同步', '线路加密下发，无需手动导入或配置'),
@@ -639,7 +653,12 @@ class _BrandPanel extends StatelessWidget {
           const Positioned.fill(child: _Aurora(onBrand: true)),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(XcSpace.huge),
+              padding: EdgeInsetsDirectional.fromSTEB(
+                XcSpace.huge + inset,
+                XcSpace.huge,
+                XcSpace.huge,
+                XcSpace.huge,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

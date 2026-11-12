@@ -76,8 +76,9 @@
 
 ### 启动与登录（`login.dart`）
 
-- `XcLaunchView`：客户端启动（`initProvider` 未就绪）和会话检查（`xcSessionProvider` 加载中）期间显示。画的是登录页同一套背景（窄屏极光；900 dp 起左侧品牌面板 + 右侧淡极光，面板只有品牌标识，标语和卖点等登录页再入场），中间是品牌标识、名称和“正在准备安全连接…”；4 秒后换成“网络较慢，仍在尝试…”和“无需操作，准备好后会自动继续。”。两个阶段共用 `XcLaunchView.handoff` 这个 GlobalKey，状态（计时、动效）在交接时保留。只换呈现，bootstrap、鉴权流程和超时不变。
+- `XcLaunchView`：客户端启动（`initProvider` 未就绪）和会话检查（`xcSessionProvider` 加载中）期间显示。画的是登录页同一套背景（窄屏极光；900 dp 起左侧品牌面板 + 右侧淡极光，面板只有品牌标识，标语和卖点等登录页再入场），中间是品牌标识、名称和“正在准备安全连接…”；启动页对用户可见满 4 秒后换成“网络较慢，仍在尝试…”和“无需操作，准备好后会自动继续。”。计时只在它所在的路由是当前路由时进行（`ModalRoute.isCurrentOf`）：首次启动时免责声明、复述声明和启动前的提示框都是推在它上面的路由，被盖住时不计时，露出时重新开始计 4 秒；已经显示“网络较慢”后不再撤回。两个阶段共用 `XcLaunchView.handoff` 这个 GlobalKey，状态（计时、动效）在交接时保留。只换呈现，bootstrap、鉴权流程和超时不变。
 - 登录页与启动页共用 `_AuthScaffold`：它记录上一次的宽窄布局，跨 900 dp 切换后用 `XcEntranceSettled` 让新布局直接显示终态，不重播入场。
+- 宽屏双栏（≥ 900 dp）按 5 : 6 分成品牌面板和表单区。内容最宽 1440 dp（`_AuthScaffold._stageWidth`）：窗口更宽时，品牌文案和表单作为一个整体居中，品牌面板的渐变向左、表单区的极光向右一直铺到窗口边缘，多出来的宽度平分到两侧。1440 dp 及以下与原来完全相同（1264 dp 默认窗口文案距左 48 dp）。启动页的状态行与登录卡片在同一水平中心，交接时视线不跳。
 - 极光背景（`_Aurora`）三层两色径向渐变：每层只填它的圆所覆盖的矩形（圆外本来就是透明，像素不变），外面包 `RepaintBoundary` 并标 `isComplex`，入场动画期间不重绘、可被光栅缓存。没有合并成一层：三层共用同一个渐变着色器程序，首帧卡顿来自着色器编译而不是填充量，合并只会改变观感。
 - 整窗页面与桌面标题栏：品牌显示启动、登录、启动失败或退出这类整窗页面（不是外壳）时，`xcFullWindowPageProvider` 为真。`application.dart` 把它交给上游 `WindowHeaderContainer.fullWindowPage`，标题栏随之变透明、去掉分隔线，页面延伸到标题栏下面，标题栏高度加进页面的 `MediaQuery.padding.top`。这些页面都用 `SafeArea`，内容不会被标题栏压住；标题栏按钮在窗口右侧，下面是页面底色和极光，沿用 `onSurface` 前景色即可保持对比度。非品牌 FlClash 不传这个 provider，行为不变。
 
@@ -101,4 +102,4 @@
 - 金额用 `context.xcMoney`（分 → 面板配置的货币）；延迟只用 `lib/xboard/probe/display_delay.dart`。
 - 页面只换呈现，不改业务：API、provider、连接闸门、更新、生命周期逻辑不在设计系统范围内。
 - 手机悬浮底栏下面的内容会滑到底栏后面（`Scaffold.extendBody`）；滚动列表一律用 `xcList` 或自行加 `context.bottomInset` 底部留白，保证最后一项能滚出底栏。
-- 截图回归：`test/xboard/ui/visual_test.dart`（登录、启动页、标题栏、首页、节点）与 `visual_phase2_test.dart`（商店、订单、账户、工单、礼品卡、邀请、更新、启动 / 退出），设置环境变量 `XC_UI_SCREENSHOTS=<目录>` 后运行会输出各尺寸 × 浅/深色 × 各状态截图；不设置时只做渲染断言。共享的尺寸、主题、字体与首页 harness 在 `visual_support.dart`。desktop / wide 两种尺寸按 Windows 平台渲染（`debugDefaultTargetPlatformOverride`，`xcVisual` 结束时复位），桌面 Material 的紧凑密度、滚动条等差异会出现在截图里；`login_launch_test.dart` 另外在 Android / Windows / macOS 三个平台上断言按钮和输入框高度一致。`xcSettle` 开头先跑两帧（`xcPrime`），让入场越过首帧等待。
+- 截图回归：`test/xboard/ui/visual_test.dart`（登录、启动页、标题栏、1264 / 1514 / 1920 / 2544 dp 原生窗口宽度、首启与冷启动时序、首页、节点）与 `visual_phase2_test.dart`（商店、订单、账户、工单、礼品卡、邀请、更新、启动 / 退出），设置环境变量 `XC_UI_SCREENSHOTS=<目录>` 后运行会输出各尺寸 × 浅/深色 × 各状态截图；不设置时只做渲染断言。共享的尺寸、主题、字体与首页 harness 在 `visual_support.dart`。desktop / wide 两种尺寸按 Windows 平台渲染（`debugDefaultTargetPlatformOverride`，`xcVisual` 结束时复位），桌面 Material 的紧凑密度、滚动条等差异会出现在截图里；`login_launch_test.dart` 另外在 Android / Windows / macOS 三个平台上断言按钮和输入框高度一致。`xcSettle` 开头先跑两帧（`xcPrime`），让入场越过首帧等待。

@@ -50,12 +50,14 @@ ThemeData xcTheme(Brightness brightness, {Color seed = xcSeed}) {
 Widget xcApp(
   Widget child, {
   Key? key,
+  GlobalKey<NavigatorState>? navigatorKey,
   Brightness brightness = Brightness.light,
   Color seed = xcSeed,
   bool reduceMotion = false,
   bool localized = false,
 }) => MaterialApp(
   key: key,
+  navigatorKey: navigatorKey,
   debugShowCheckedModeBanner: false,
   themeAnimationStyle: AnimationStyle.noAnimation,
   theme: xcTheme(brightness, seed: seed),

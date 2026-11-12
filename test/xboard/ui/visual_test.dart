@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/l10n/l10n.dart';
@@ -8,6 +10,8 @@ import 'package:fl_clash/providers/config.dart';
 import 'package:fl_clash/providers/database.dart';
 import 'package:fl_clash/providers/state.dart';
 import 'package:fl_clash/state.dart';
+import 'package:fl_clash/ui/navigator.dart';
+import 'package:fl_clash/views/disclaimer.dart';
 import 'package:fl_clash/xboard/core/net/api_exception.dart';
 import 'package:fl_clash/xboard/core/sync/subscription_sync.dart';
 import 'package:fl_clash/xboard/ui/common/motion.dart';
@@ -131,25 +135,7 @@ void main() {
                   key: ValueKey(name),
                   brightness: brightness,
                   localized: true,
-                  WindowHeaderLayout(
-                    height: 32,
-                    overlaid: overlaid,
-                    header: WindowHeaderBar(
-                      height: 32,
-                      backdropOpacity: overlaid ? 0 : null,
-                      divider: !overlaid,
-                      onDragStart: () {},
-                      onDoubleTap: () {},
-                      actions: WindowHeaderActions(
-                        state: caption,
-                        onPin: () {},
-                        onMinimize: () {},
-                        onMaximize: () {},
-                        onClose: () {},
-                      ),
-                    ),
-                    child: page(),
-                  ),
+                  _windowHeader(caption, overlaid: overlaid, child: page()),
                 ),
               ),
             );
@@ -428,6 +414,77 @@ void main() {
     }
   });
 
+  for (final brightness in Brightness.values) {
+    final theme = brightness.name;
+    for (final window in _windows) {
+      final width = window.width.toInt();
+      xcVisual('the sign-in backdrop stays composed at $width dp $theme', (
+        tester,
+      ) async {
+        xcView(tester, XcShotSize.desktop);
+        tester.view.physicalSize = window;
+        final caption = ValueNotifier(const WindowCaptionState());
+        addTearDown(caption.dispose);
+        for (final (name, page) in [
+          ('login', _titlebarLogin),
+          ('launch', _titlebarLaunch),
+        ]) {
+          await tester.pumpWidget(
+            xcFramed(
+              xcApp(
+                key: ValueKey(name),
+                brightness: brightness,
+                localized: true,
+                _windowHeader(caption, overlaid: true, child: page()),
+              ),
+            ),
+          );
+          await xcSettle(tester);
+          await xcShot(tester, 'window$width-$theme-$name', XcShotSize.desktop);
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+
+    xcVisual('first run: the launch clock starts when the disclaimer closes '
+        '$theme', (tester) async {
+      final signedOut = await _pumpStartup(tester, brightness);
+      final consent = requestDisclaimerConsent();
+      await _frames(tester, 1000);
+      expect(find.byType(DisclaimerView), findsOneWidget);
+      await xcShot(tester, 'firstrun-$theme-0-disclaimer', XcShotSize.desktop);
+      await tester.pump(const Duration(seconds: 9));
+      rootNavigatorKey.currentState!.pop(true);
+      await _shootLaunch(tester, 'firstrun-$theme', first: 1, const [
+        (150, null),
+        (600, false),
+        (3900, false),
+        (4500, true),
+      ]);
+      expect(await consent, isTrue);
+      signedOut.value = true;
+      await xcSettle(tester);
+      await xcShot(tester, 'firstrun-$theme-5-login', XcShotSize.desktop);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    xcVisual('cold start: preparing, then slow, then the sign-in page $theme', (
+      tester,
+    ) async {
+      final signedOut = await _pumpStartup(tester, brightness);
+      await _shootLaunch(tester, 'coldstart-$theme', const [
+        (100, null),
+        (700, false),
+        (3900, false),
+        (4500, true),
+      ]);
+      signedOut.value = true;
+      await xcSettle(tester);
+      await xcShot(tester, 'coldstart-$theme-4-login', XcShotSize.desktop);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   xcVisual('page switch fades through and settles', (tester) async {
     xcView(tester, XcShotSize.phone);
     await tester.pumpWidget(xcFramed(xcApp(XcHomeHarness(data: xcHomeData()))));
@@ -525,3 +582,111 @@ Widget _titlebarLogin() => XcLoginPage(
 );
 
 Widget _titlebarLaunch() => const XcLaunchView(displayName: 'Example 加速器');
+
+/// Window sizes from the native review: the default window, the widest a
+/// 1512 dp display allows, a full HD screen, and a maximised QHD screen.
+const _windows = [
+  Size(1264, 871),
+  Size(1514, 956),
+  Size(1920, 1080),
+  Size(2544, 1383),
+];
+
+Widget _windowHeader(
+  ValueNotifier<WindowCaptionState> caption, {
+  required bool overlaid,
+  required Widget child,
+}) => WindowHeaderLayout(
+  height: 32,
+  overlaid: overlaid,
+  header: WindowHeaderBar(
+    height: 32,
+    backdropOpacity: overlaid ? 0 : null,
+    divider: !overlaid,
+    onDragStart: () {},
+    onDoubleTap: () {},
+    actions: WindowHeaderActions(
+      state: caption,
+      onPin: () {},
+      onMinimize: () {},
+      onMaximize: () {},
+      onClose: () {},
+    ),
+  ),
+  child: child,
+);
+
+/// The startup path of a branded window: the launch view as the root page,
+/// where the disclaimer is pushed, until [ValueNotifier.value] signs out.
+Future<ValueNotifier<bool>> _pumpStartup(
+  WidgetTester tester,
+  Brightness brightness,
+) async {
+  final window = _windows.first;
+  xcView(tester, XcShotSize.desktop);
+  tester.view.physicalSize = window;
+  final container = ProviderContainer();
+  addTearDown(container.dispose);
+  globalState.container = container;
+  container.read(viewSizeProvider.notifier).update((_) => window);
+  final signedOut = ValueNotifier(false);
+  addTearDown(signedOut.dispose);
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: xcFramed(
+        xcApp(
+          brightness: brightness,
+          localized: true,
+          navigatorKey: rootNavigatorKey,
+          ValueListenableBuilder(
+            valueListenable: signedOut,
+            builder: (_, out, _) => out
+                ? _titlebarLogin()
+                : XcLaunchView(
+                    key: XcLaunchView.handoff,
+                    displayName: 'Example 加速器',
+                  ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return signedOut;
+}
+
+Future<void> _frames(WidgetTester tester, int ms) async {
+  for (var left = ms; left > 0; left -= 50) {
+    await tester.pump(Duration(milliseconds: math.min(50, left)));
+  }
+}
+
+Future<void> _shootLaunch(
+  WidgetTester tester,
+  String prefix,
+  List<(int, bool?)> frames, {
+  int first = 0,
+}) async {
+  var elapsed = 0;
+  for (final (index, (ms, slow)) in frames.indexed) {
+    await _frames(tester, ms - elapsed);
+    elapsed = ms;
+    if (slow != null) {
+      expect(
+        find.text('网络较慢，仍在尝试…'),
+        slow ? findsOneWidget : findsNothing,
+        reason: '$prefix $ms ms',
+      );
+      expect(
+        find.text('正在准备安全连接…'),
+        slow ? findsNothing : findsOneWidget,
+        reason: '$prefix $ms ms',
+      );
+    }
+    await xcShot(
+      tester,
+      '$prefix-${first + index}-${ms}ms',
+      XcShotSize.desktop,
+    );
+  }
+}

@@ -7,7 +7,9 @@ import 'package:fl_clash/xboard/providers.dart';
 import 'package:fl_clash/xboard/ui/account/account_pages.dart';
 import 'package:fl_clash/xboard/ui/account/support_pages.dart';
 import 'package:fl_clash/xboard/ui/common/components.dart';
+import 'package:fl_clash/xboard/ui/common/gradient.dart';
 import 'package:fl_clash/xboard/ui/common/motion.dart';
+import 'package:fl_clash/xboard/ui/common/tokens.dart';
 import 'package:fl_clash/xboard/ui/login.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -237,6 +239,95 @@ void main() {
     });
   });
 
+  group('wide layout', () {
+    const pitch = '一键连接，\n安心畅游网络';
+
+    Future<({double pitch, Rect panel, double form, double status})> measure(
+      WidgetTester tester,
+      Size size,
+    ) async {
+      _size(tester, size);
+      await tester.pumpWidget(xcApp(_login()));
+      await xcSettle(tester);
+      final panel = tester.getRect(
+        find.ancestor(
+          of: find.text(pitch),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is XcGradientDecoration,
+          ),
+        ),
+      );
+      final shown = (
+        pitch: tester.getTopLeft(find.text(pitch)).dx,
+        panel: panel,
+        form: tester.getCenter(find.byKey(const Key('xc-login-submit'))).dx,
+      );
+      await tester.pumpWidget(
+        xcApp(const XcLaunchView(displayName: _brand), key: UniqueKey()),
+      );
+      await xcSettle(tester);
+      final status = tester
+          .getCenter(
+            find
+                .ancestor(
+                  of: find.text('正在准备安全连接…'),
+                  matching: find.byType(Row),
+                )
+                .first,
+          )
+          .dx;
+      await tester.pumpWidget(const SizedBox.shrink());
+      return (
+        pitch: shown.pitch,
+        panel: shown.panel,
+        form: shown.form,
+        status: status,
+      );
+    }
+
+    testWidgets('the default window splits the panel and the form 5 to 6', (
+      tester,
+    ) async {
+      final shown = await measure(tester, const Size(1264, 871));
+      expect(shown.panel.left, 0);
+      expect(shown.panel.width, moreOrLessEquals(1264 * 5 / 11));
+      expect(shown.pitch, XcSpace.huge);
+      expect(shown.form, moreOrLessEquals((shown.panel.right + 1264) / 2));
+      expect(shown.status, moreOrLessEquals(shown.form));
+    });
+
+    testWidgets(
+      'a wider window centres the 1440 dp stage, colour to the edge',
+      (tester) async {
+        final stage = await measure(tester, const Size(1440, 900));
+        for (final window in const [Size(1920, 1080), Size(2544, 1383)]) {
+          final shown = await measure(tester, window);
+          final shift = (window.width - 1440) / 2;
+          final reason = '${window.width} dp';
+          expect(shown.panel.left, 0, reason: reason);
+          expect(
+            shown.panel.right,
+            moreOrLessEquals(stage.panel.right + shift),
+            reason: reason,
+          );
+          expect(
+            shown.pitch,
+            moreOrLessEquals(stage.pitch + shift),
+            reason: reason,
+          );
+          expect(
+            shown.form,
+            moreOrLessEquals(stage.form + shift),
+            reason: reason,
+          );
+          expect(shown.status, moreOrLessEquals(shown.form), reason: reason);
+        }
+      },
+    );
+  });
+
   group('launch view', () {
     testWidgets('says what it is doing, then that the network is slow', (
       tester,
@@ -249,6 +340,44 @@ void main() {
       expect(find.text('无需操作，准备好后会自动继续。'), findsNothing);
       await tester.pump(XcLaunchView.slowAfter);
       await xcSettle(tester);
+      expect(find.text('网络较慢，仍在尝试…'), findsOneWidget);
+      expect(find.text('无需操作，准备好后会自动继续。'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('the wait counts from when no route covers the view', (
+      tester,
+    ) async {
+      _size(tester, const Size(390, 844));
+      await tester.pumpWidget(xcApp(const XcLaunchView(displayName: _brand)));
+      await xcPrime(tester);
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      unawaited(
+        navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: Text('免责声明')),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('免责声明'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 9));
+
+      navigator.pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('免责声明'), findsNothing);
+      expect(find.text('正在准备安全连接…'), findsOneWidget);
+      expect(find.text('网络较慢，仍在尝试…'), findsNothing);
+      await tester.pump(
+        XcLaunchView.slowAfter - const Duration(milliseconds: 600),
+      );
+      await xcPrime(tester);
+      expect(find.text('网络较慢，仍在尝试…'), findsNothing);
+      await tester.pump(const Duration(milliseconds: 200));
+      await xcSettle(tester);
+      expect(find.text('正在准备安全连接…'), findsNothing);
       expect(find.text('网络较慢，仍在尝试…'), findsOneWidget);
       expect(find.text('无需操作，准备好后会自动继续。'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
