@@ -202,7 +202,8 @@ class OrchestrationTest(unittest.TestCase):
         change = self.test.report['main_change']
         self.assertGreaterEqual(change.pop('ms_since_launch'), 0)
         self.assertEqual(change, {
-            'vm_start_changed': False, 'main_id_changed': True, 'main_number_changed': False, 'main_group_changed': False,
+            'vm_start_changed': False, 'vm_start_delta_ms': 0, 'vm_start_delta_clamped': False,
+            'main_id_changed': True, 'main_number_changed': False, 'main_group_changed': False,
             'original': {'isolate_count': 1, 'non_system_isolate_count': 1, 'system_flag_missing_count': 0, 'main_named_count': 1},
             'observed': {'isolate_count': 2, 'non_system_isolate_count': 1, 'system_flag_missing_count': 0, 'main_named_count': 1},
             'replacement': 1, 'observation': 1, 'validation_hint_visible': True,
@@ -216,11 +217,11 @@ class OrchestrationTest(unittest.TestCase):
         self.test.record = Mock(side_effect=[b'mResumedActivity: ActivityRecord{aa22 u0 com.xclient.example.dev/com.follow.clash.MainActivity t5}', b'mResumedActivity: ActivityRecord{bb33 u0 com.xclient.example.dev/com.follow.clash.MainActivity t6}'])
         self.device.call.return_value = b'Status: ok\n'
         self.device.ui.side_effect = probe.ProofRefused('ui_unavailable')
-        self.test.channel.read.side_effect = [self.original, probe.vm_snapshot(vm(start=456), 321)]
+        self.test.channel.read.side_effect = [self.original, probe.vm_snapshot(vm('isolates/99'), 321)]
         with patch.object(probe.time, 'sleep'), self.assertRaisesRegex(probe.ProofRefused, '^main_isolate_changed_during_replacement$'):
             self.test.replace(2, self.original)
         change = self.test.report['main_change']
-        self.assertEqual({key: change[key] for key in ('vm_start_changed', 'main_id_changed', 'replacement', 'observation', 'validation_hint_visible')}, {'vm_start_changed': True, 'main_id_changed': False, 'replacement': 2, 'observation': 2, 'validation_hint_visible': None})
+        self.assertEqual({key: change[key] for key in ('vm_start_changed', 'main_id_changed', 'replacement', 'observation', 'validation_hint_visible')}, {'vm_start_changed': False, 'main_id_changed': True, 'replacement': 2, 'observation': 2, 'validation_hint_visible': None})
         self.assertEqual(self.test.report['replacements'], [])
 
     def test_isolate_counts_show_a_main_named_isolate_the_filter_skipped(self):
@@ -236,6 +237,7 @@ class OrchestrationTest(unittest.TestCase):
     def quit_fixture(self, reopened):
         self.test.events = Mock(side_effect=[self.before, self.destroyed, self.destroyed, self.reopened])
         self.test.record = Mock(return_value=b'mResumedActivity: ActivityRecord{cc44 u0 com.android.launcher/.Launcher t1}')
+        self.test.channel = Mock()
         self.test.channel.read.side_effect = probe.VmUnavailable('vm_endpoint_unavailable')
         self.test.connect = Mock(return_value=reopened)
         self.test.quit_button = Mock(return_value=Mock())
@@ -249,13 +251,92 @@ class OrchestrationTest(unittest.TestCase):
         self.assertNotIn('new_main_identity_verified', self.test.report['quit'])
         self.device.start.assert_called_once()
 
-    def test_quit_reopen_uses_observed_new_vm_namespace_when_opaque_ids_repeat(self):
-        self.quit_fixture(probe.vm_snapshot(vm(start=124), 321))
+    def test_quit_reopen_with_the_old_main_still_listed_fails_whatever_startTime_says(self):
+        # getVM.startTime is recomputed per request, so a different value is
+        # no evidence of a new VM: the same main identity must still fail.
+        for start in (124, 123 + 5000):
+            self.quit_fixture(probe.vm_snapshot(vm(start=start), 321))
+            with self.subTest(start=start), patch.object(probe.time, 'sleep'), self.assertRaisesRegex(probe.ProofRefused, '^explicit_quit_fresh_generation_unconfirmed$'):
+                self.test.quit_and_reopen(self.original)
+        # A new main whose response still lists the old main id also fails.
+        both = vm('isolates/2')
+        both['result']['isolates'].append({'type': '@Isolate', 'id': 'isolates/1', 'name': 'old', 'isSystemIsolate': False})
+        self.quit_fixture(probe.vm_snapshot(both, 321))
+        with patch.object(probe.time, 'sleep'), self.assertRaisesRegex(probe.ProofRefused, '^explicit_quit_fresh_generation_unconfirmed$'):
+            self.test.quit_and_reopen(self.original)
+
+    def test_quit_reopen_passes_on_a_new_main_with_the_old_id_gone_and_reports_the_start_delta(self):
+        self.quit_fixture(probe.vm_snapshot(vm('isolates/2', start=123), 321))
         with patch.object(probe.time, 'sleep'):
             self.test.quit_and_reopen(self.original)
-        self.assertTrue(self.test.report['quit']['new_vm_instance_verified'])
-        self.assertTrue(self.test.report['quit']['old_isolate_identity_absent_after_reopen'])
-        self.assertFalse(self.test.report['quit']['new_main_id_differs'])
+        quit = self.test.report['quit']
+        self.assertTrue(quit['new_main_identity_verified'])
+        self.assertTrue(quit['new_main_id_differs'])
+        self.assertTrue(quit['old_isolate_identity_absent_after_reopen'])
+        self.assertTrue(quit['same_guest_birth_on_reopen'])
+        self.assertNotIn('new_vm_instance_verified', quit)
+        self.assertEqual((quit['vm_start_delta_ms'], quit['vm_start_delta_clamped']), (0, False))
+
+    def test_quit_teardown_judges_the_old_main_by_its_id_not_by_startTime(self):
+        self.quit_fixture(probe.vm_snapshot(vm('isolates/2'), 321))
+        self.test.channel.read.side_effect = [probe.vm_snapshot(vm(start=999), 321), probe.vm_snapshot(vm(start=1000), 321)]
+        with patch.object(probe.time, 'sleep'):
+            self.test.quit_and_reopen(self.original)
+        self.assertIs(self.test.report['quit']['old_isolate_absent_before_reopen'], False)
+
+    def real_shape(self, start=1762936000123, **main):
+        # The run 43195838092 shape: two non-system isolates, one named main.
+        response = vm(start=start)
+        response['result']['isolates'][0].update(main)
+        response['result']['isolates'].append({'type': '@Isolate', 'id': 'isolates/40', 'number': '40', 'name': 'worker', 'isSystemIsolate': False, 'isolateGroupId': 'isolateGroups/41'})
+        return probe.vm_snapshot(response, 321)
+
+    def replacement(self, observed):
+        pending = self.before + probe.activity_events((event(12, 'wm_on_create_called', 3) + '\n' + event(11, 'wm_on_destroy_called', 4).replace('performTest', 'performDestroy') + '\n' + event(12, 'wm_on_resume_called', 5)).encode(), 321)
+        self.test.events = Mock(side_effect=[self.before, pending, pending])
+        self.test.record = Mock(side_effect=[b'mResumedActivity: ActivityRecord{aa22 u0 com.xclient.example.dev/com.follow.clash.MainActivity t5}', b'mResumedActivity: ActivityRecord{bb33 u0 com.xclient.example.dev/com.follow.clash.MainActivity t6}'])
+        self.device.call.return_value = b'Status: ok\n'
+        self.test.channel.read.side_effect = list(observed)
+        with patch.object(probe.time, 'sleep'):
+            self.test.replace(2, self.real_shape())
+
+    def test_a_replacement_keeps_the_same_main_when_only_startTime_moves(self):
+        for delta in (1, -1, 5000, -3_600_000):
+            self.test.report['replacements'] = []
+            moved = self.real_shape(1762936000123 + delta)
+            with self.subTest(delta=delta):
+                self.replacement([moved, moved])
+                entry = self.test.report['replacements'][0]
+                self.assertTrue(entry['same_vm_instance'] and entry['same_main_isolate'] and entry['same_guest_birth'])
+                self.assertEqual((entry['vm_start_delta_ms'], entry['vm_start_delta_clamped']), (delta, False))
+                self.assertNotIn('main_change', self.test.report)
+
+    def test_a_replacement_still_fails_on_any_real_main_or_guest_change(self):
+        for name, main in [('id', {'id': 'isolates/99'}), ('number', {'number': '2'}), ('group', {'isolateGroupId': 'isolateGroups/9'})]:
+            self.test.report.pop('main_change', None)
+            with self.subTest(name), self.assertRaisesRegex(probe.ProofRefused, '^main_isolate_changed_during_replacement$'):
+                self.replacement([self.real_shape(1762936000124, **main)])
+            change = self.test.report['main_change']
+            self.assertEqual([change['main_id_changed'], change['main_number_changed'], change['main_group_changed']], [name == 'id', name == 'number', name == 'group'])
+            self.assertEqual((change['vm_start_changed'], change['vm_start_delta_ms']), (True, 1))
+        self.test.same_guest = Mock(side_effect=[None, probe.ProofRefused('guest_process_changed')])
+        with self.assertRaisesRegex(probe.ProofRefused, '^guest_process_changed$'):
+            self.replacement([self.real_shape()])
+        self.test.same_guest = Mock()
+        foreign = vm(start=1762936000123)
+        foreign['result']['pid'] = 322
+        with self.assertRaisesRegex(probe.ProofRefused, '^owned_vm_identity_unconfirmed$'):
+            probe.vm_snapshot(foreign, 321)
+        vanished = vm()
+        vanished['result']['isolates'] = []
+        with self.assertRaisesRegex(probe.ProofRefused, '^single_main_isolate_required$'):
+            probe.vm_snapshot(vanished, 321)
+
+    def test_the_start_delta_is_bounded(self):
+        original, far = self.real_shape(10), self.real_shape(10 + 10 ** 12)
+        self.assertEqual(probe.vm_start_delta(original, far), {'vm_start_delta_ms': 86_400_000, 'vm_start_delta_clamped': True})
+        self.assertEqual(probe.vm_start_delta(far, original), {'vm_start_delta_ms': -86_400_000, 'vm_start_delta_clamped': True})
+        self.assertEqual(probe.vm_start_delta(original, original), {'vm_start_delta_ms': 0, 'vm_start_delta_clamped': False})
 
     def test_failed_ownership_cleanup_stays_red_and_drops_raw_errors(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:

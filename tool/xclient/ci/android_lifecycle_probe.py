@@ -85,12 +85,28 @@ def vm_snapshot(response, pid, *, allow_empty=False):
 VALIDATION_HINTS = ('请输入邮箱', '请输入密码')
 
 
+VM_START_DELTA_LIMIT_MS = 86_400_000
+
+
+def vm_start_delta(original, observed):
+    """Diagnostic only, never an identity.
+
+    Dart's getVM computes startTime on every request as
+    OS::GetCurrentTimeMillis() - Dart::UptimeMillis() (runtime/vm/service.cc,
+    PrintJSONForVM), two separately truncated clocks, so one VM reports values
+    a millisecond apart and follows any guest wall-clock step.
+    """
+    delta = observed['vm_start'] - original['vm_start']
+    return {'vm_start_delta_ms': max(-VM_START_DELTA_LIMIT_MS, min(VM_START_DELTA_LIMIT_MS, delta)), 'vm_start_delta_clamped': abs(delta) > VM_START_DELTA_LIMIT_MS}
+
+
 def main_change(original, observed):
     """Which identity part moved, and the shape of both isolate lists; no ids."""
     before, after = original['main'] or {}, observed['main'] or {}
     counts = ('isolate_count', 'non_system_isolate_count', 'system_flag_missing_count', 'main_named_count')
     return {
         'vm_start_changed': observed['vm_start'] != original['vm_start'],
+        **vm_start_delta(original, observed),
         'main_id_changed': after.get('id') != before.get('id'),
         'main_number_changed': after.get('number') != before.get('number'),
         'main_group_changed': after.get('isolateGroupId') != before.get('isolateGroupId'),
@@ -233,7 +249,10 @@ class LifecycleProbe:
             return None
 
     def require_same_main(self, original, observed, *, index, observation, launched):
-        if observed['vm_start'] == original['vm_start'] and observed['main'] == original['main']:
+        # Same VM = the owned PID (vm_snapshot binds getVM.pid to the guest),
+        # the guest birth rechecked by same_guest() before every read, and an
+        # identical main {id, number, isolateGroupId}. startTime is not used.
+        if observed['pid'] == original['pid'] and observed['main'] == original['main']:
             return
         self.report['main_change'] = dict(main_change(original, observed), replacement=index, observation=observation, ms_since_launch=int((time.monotonic() - launched) * 1000), validation_hint_visible=self.validation_hint_visible())
         raise ProofRefused('main_isolate_changed_during_replacement')
@@ -286,7 +305,7 @@ class LifecycleProbe:
                     self.same_guest()
                     final = self.channel.read(self.guest['pid'])
                     self.require_same_main(original, final, index=index, observation=observations + 1, launched=launched)
-                    self.report['replacements'].append({'client_destroy_callback_returned': True, 'different_client_activity': True, 'different_server_record': True, 'same_guest_birth': True, 'same_vm_instance': True, 'same_main_isolate': True, 'main_observations': observations + 1, 'old_activity_sha256': hash_identity(old), 'new_activity_sha256': hash_identity(current), 'main_identity_sha256': hash_identity(original['main'])})
+                    self.report['replacements'].append({'client_destroy_callback_returned': True, 'different_client_activity': True, 'different_server_record': True, 'same_guest_birth': True, 'same_vm_instance': True, 'same_main_isolate': True, 'main_observations': observations + 1, 'old_activity_sha256': hash_identity(old), 'new_activity_sha256': hash_identity(current), 'main_identity_sha256': hash_identity(original['main']), **vm_start_delta(original, final)})
                     return
             time.sleep(0.3)
         raise ProofRefused('activity_replacement_proof_timeout')
@@ -331,7 +350,7 @@ class LifecycleProbe:
                 absent += 1
                 try:
                     observed = self.channel.read(self.guest['pid'], allow_empty=True)
-                    prior_absent = observed['vm_start'] != original['vm_start'] or original['main']['id'] not in observed['isolate_ids']
+                    prior_absent = original['main']['id'] not in observed['isolate_ids']
                 except VmUnavailable:
                     service_unavailable = True
                 if absent >= 2:
@@ -347,11 +366,14 @@ class LifecycleProbe:
         self.device.wait_label('登录')
         self.same_guest()
         reopened = self.connect()
-        fresh_vm = reopened['vm_start'] != original['vm_start']
-        fresh_main = fresh_vm or reopened['main'] != original['main']
-        old_absent = fresh_vm or original['main']['id'] not in reopened['isolate_ids']
+        # The guest process is required to be the same one across Quit
+        # (same_guest() above), so a fresh generation is a new main identity
+        # whose response no longer lists the old main id; startTime proves
+        # nothing about a new VM and is only reported.
+        fresh_main = reopened['main'] != original['main']
+        old_absent = original['main']['id'] not in reopened['isolate_ids']
         require(fresh_main and old_absent and current_activity(self.events()) != old, 'explicit_quit_fresh_generation_unconfirmed')
-        self.report['quit'].update(same_guest_birth_on_reopen=True, new_vm_instance_verified=fresh_vm, new_main_identity_verified=fresh_main, new_main_id_differs=reopened['main']['id'] != original['main']['id'], old_isolate_identity_absent_after_reopen=old_absent)
+        self.report['quit'].update(same_guest_birth_on_reopen=True, new_main_identity_verified=fresh_main, new_main_id_differs=reopened['main']['id'] != original['main']['id'], old_isolate_identity_absent_after_reopen=old_absent, **vm_start_delta(original, reopened))
         self.report['captures']['quit_reopened'] = self.device.capture('08-explicit-quit-reopened')
 
     def run(self):

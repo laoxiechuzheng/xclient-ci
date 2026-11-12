@@ -5,6 +5,7 @@ import 'package:fl_clash/ui/navigation_dock.dart' show ElasticPress;
 import 'package:fl_clash/ui/shape.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../common/gradient.dart';
 import '../common/tokens.dart';
 
 enum XcLinkState {
@@ -229,31 +230,50 @@ class _OrbPainter extends CustomPainter {
           : Color.lerp(colors.inset, accent.withValues(alpha: 0.18), active)!;
     canvas.drawCircle(center, ring, track);
 
-    final arc = Paint()
+    Paint arc(Paint paint) => paint
       ..style = PaintingStyle.stroke
       ..strokeWidth = stroke
       ..strokeCap = StrokeCap.round;
     if (orbit case final turn?) {
       final start = turn * math.pi * 2 - math.pi / 2;
       const sweep = math.pi * 0.62;
-      arc.shader = SweepGradient(
-        startAngle: 0,
-        endAngle: sweep,
-        colors: [accent.withValues(alpha: 0), accent],
-        transform: GradientRotation(start),
-      ).createShader(ringRect);
-      canvas.drawArc(ringRect, start, sweep, false, arc);
+      canvas.drawArc(
+        ringRect,
+        start,
+        sweep,
+        false,
+        arc(
+          Paint()
+            ..shader = SweepGradient(
+              startAngle: 0,
+              endAngle: sweep,
+              colors: [accent.withValues(alpha: 0), accent],
+              transform: GradientRotation(start),
+            ).createShader(ringRect),
+        ),
+      );
     } else if (active > 0) {
-      arc.shader = SweepGradient(
-        colors: [
-          colors.accentLight,
-          accent,
-          colors.accentDeep,
-          colors.accentLight,
-        ],
-        transform: const GradientRotation(-math.pi / 2),
-      ).createShader(ringRect);
-      canvas.drawArc(ringRect, -math.pi / 2, math.pi * 2 * active, false, arc);
+      paintXcGradient(
+        canvas,
+        SweepGradient(
+          colors: [
+            colors.accentLight,
+            accent,
+            colors.accentDeep,
+            colors.accentLight,
+          ],
+          transform: const GradientRotation(-math.pi / 2),
+        ),
+        ringRect,
+        (paint) => canvas.drawArc(
+          ringRect,
+          -math.pi / 2,
+          math.pi * 2 * active,
+          false,
+          arc(paint),
+        ),
+        bleed: stroke,
+      );
     }
 
     final discRect = Rect.fromCircle(center: center, radius: disc);
@@ -277,20 +297,12 @@ class _OrbPainter extends CustomPainter {
         ).createShader(discRect),
     );
     if (active > 0) {
-      final gradient = colors.accentGradient;
-      canvas.drawCircle(
-        center,
-        disc,
-        Paint()
-          ..shader = LinearGradient(
-            begin: gradient.begin,
-            end: gradient.end,
-            stops: gradient.stops,
-            colors: [
-              for (final color in gradient.colors)
-                color.withValues(alpha: active),
-            ],
-          ).createShader(discRect),
+      paintXcGradient(
+        canvas,
+        colors.accentGradient,
+        discRect,
+        (paint) => canvas.drawCircle(center, disc, paint),
+        opacity: active,
       );
       canvas.drawCircle(
         center,

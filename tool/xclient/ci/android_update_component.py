@@ -84,24 +84,83 @@ def resumed_component(activity):
     return names.pop()
 
 
+SOURCE_SETTINGS_PACKAGE = 'com.android.settings'
+SOURCE_SWITCH_TITLE = 'Allow from this source'
+SOURCE_PAGE_TITLE = 'Install unknown apps'
+VIEW_SOURCE_SETTINGS = ('.Settings$ManageExternalSourcesActivity', 'com.android.settings.Settings$ManageExternalSourcesActivity')
+# AOSP android15-release, platform/packages/apps/Settings:
+# - AndroidManifest.xml: ACTION_MANAGE_UNKNOWN_APP_SOURCES with a package: URI
+#   (what UpdatePlugin.openInstallSettings sends) resolves to
+#   Settings$ManageAppExternalSourcesActivity, FRAGMENT_CLASS ExternalSourcesDetails.
+# - src/com/android/settings/SettingsActivityUtil.kt maps ExternalSourcesDetails to
+#   InstallUnknownAppsListProvider's app route; SettingsActivity.launchSettingFragment
+#   then calls startSpaActivity() and finish() while FeatureFlagUtils
+#   SETTINGS_ENABLE_SPA is on (frameworks/base default "true").
+# - src/com/android/settings/spa/SpaActivity.kt starts Intent(this, SpaActivity::class.java);
+#   the manifest declares it as ".spa.SpaActivity" (exported="false").
+# SpaActivity hosts every SPA page, so on it the page is also bound by its title
+# (SettingsLib install_other_apps) next to the switch title (external_source_switch_title).
+SPA_SOURCE_SETTINGS = ('.spa.SpaActivity', 'com.android.settings.spa.SpaActivity')
+
+
+def source_permission_switch(tree, component, label, checked, missing):
+    """The one owned "Allow from this source" control in the given state.
+
+    The View page exposes a Switch widget beside the title; the SPA (Compose)
+    page exposes one checkable, clickable row whose subtree holds the title.
+    """
+    package, cls = component.split('/')
+    spa = cls in SPA_SOURCE_SETTINGS
+    qa.require(package == SOURCE_SETTINGS_PACKAGE and (spa or cls in VIEW_SOURCE_SETTINGS), 'owned_source_settings_required')
+    qa.require(qa.visible_anr_owner(tree) is None, 'component_system_anr_refused')
+    nodes = list(tree.iter('node'))
+
+    def owned(text, within=nodes):
+        return [n for n in within if n.get('package') == package and qa.ui_label(n).strip() == text]
+
+    qa.require(len(owned(label)) == 1, 'owned_app_system_label_required')
+    qa.require(len(owned(SOURCE_SWITCH_TITLE)) == 1, 'source_permission_control_required')
+    if spa:
+        qa.require(len(owned(SOURCE_PAGE_TITLE)) == 1, 'source_settings_title_required')
+        switches = [n for n in nodes if n.get('package') == package and n.get('checkable') == 'true' and n.get('clickable') == 'true' and n.get('enabled') == 'true' and n.get('checked') == checked
+                    and all(d.get('package') == package for d in n.iter('node')) and len(owned(SOURCE_SWITCH_TITLE, list(n.iter('node')))) == 1]
+    else:
+        switches = [n for n in nodes if n.get('package') == package and n.get('class') in ('android.widget.Switch', 'android.widget.CompoundButton') and n.get('checkable') == 'true' and n.get('checked') == checked and n.get('enabled') == 'true' and n.get('resource-id') in ('com.android.settings:id/switch_widget', 'android:id/switch_widget')]
+    qa.require(len(switches) == 1, missing)
+    return switches[0]
+
+
 def system_action(tree, activity, action, label):
     component = resumed_component(activity)
     package, cls = component.split('/')
     if action == 'permission':
-        qa.require(package == 'com.android.settings' and cls in ('.Settings$ManageExternalSourcesActivity', 'com.android.settings.Settings$ManageExternalSourcesActivity'), 'owned_source_settings_required')
-    else:
-        qa.require(action == 'install' and package in ('com.android.packageinstaller', 'com.google.android.packageinstaller') and cls == 'com.android.packageinstaller.PackageInstallerActivity', 'owned_package_installer_required')
+        switch = source_permission_switch(tree, component, label, 'false', 'unique_system_action_required')
+        return {'package': package, 'component': component, 'center': qa.node_center(switch)}
+    # AOSP android15-release frameworks/base/packages/PackageInstaller: InstallStart
+    # only hands off to v2.ui.InstallLaunch when Flags.usePiaV2() is on; use_pia_v2
+    # has no android15 release value (build/release aconfig/ap3a), so it stays off
+    # and PackageInstallerActivity shows the AlertDialog checked here.
+    qa.require(action == 'install' and package in ('com.android.packageinstaller', 'com.google.android.packageinstaller') and cls == 'com.android.packageinstaller.PackageInstallerActivity', 'owned_package_installer_required')
     qa.require(qa.visible_anr_owner(tree) is None, 'component_system_anr_refused')
     nodes = list(tree.iter('node'))
     qa.require(len([n for n in nodes if n.get('package') == package and qa.ui_label(n).strip() == label]) == 1, 'owned_app_system_label_required')
-    if action == 'permission':
-        qa.require(len([n for n in nodes if n.get('package') == package and qa.ui_label(n).strip() == 'Allow from this source']) == 1, 'source_permission_control_required')
-        buttons = [n for n in nodes if n.get('package') == package and n.get('class') in ('android.widget.Switch', 'android.widget.CompoundButton') and n.get('checkable') == 'true' and n.get('checked') == 'false' and n.get('enabled') == 'true' and n.get('resource-id') in ('com.android.settings:id/switch_widget', 'android:id/switch_widget')]
-    else:
-        qa.require(len([n for n in nodes if n.get('package') == package and n.get('resource-id') == 'android:id/button2' and qa.ui_label(n).strip() == 'Cancel']) == 1, 'installer_cancel_control_required')
-        buttons = [n for n in nodes if n.get('package') == package and n.get('resource-id') == 'android:id/button1' and qa.ui_label(n).strip() in ('Update', 'Install') and n.get('enabled') == 'true']
+    qa.require(len([n for n in nodes if n.get('package') == package and n.get('resource-id') == 'android:id/button2' and qa.ui_label(n).strip() == 'Cancel']) == 1, 'installer_cancel_control_required')
+    buttons = [n for n in nodes if n.get('package') == package and n.get('resource-id') == 'android:id/button1' and qa.ui_label(n).strip() in ('Update', 'Install') and n.get('enabled') == 'true']
     qa.require(len(buttons) == 1, 'unique_system_action_required')
     return {'package': package, 'component': component, 'center': qa.node_center(buttons[0])}
+
+
+def diagnostic_component(activity):
+    """The resumed component for a failure report, or None when not exactly one."""
+    try:
+        return resumed_component(activity)
+    except qa.Refused:
+        return None
+
+
+def refusal_code(error):
+    code = str(error)
+    return code if re.fullmatch(r'[a-z0-9_]{1,80}', code) else 'unrecognised_refusal'
 
 
 def load(args, role=None):
@@ -426,18 +485,28 @@ class ComponentDriver:
         qa.require(previous == owner, 'system_package_owner_changed')
 
     def observe_system(self, action):
+        self.system_component = None
         tree = self.device.ui()
         activity = self.device.call('shell', 'dumpsys', 'activity', 'activities')
+        self.system_component = diagnostic_component(activity)
         return system_action(tree, activity, action, self.pair['stages']['1']['app_label'])
+
+    def system_refused(self, code, attempts, refusal):
+        """Report why a bounded system-UI wait gave up: codes and a component name only."""
+        self.report.update(system_action_last_refusal=refusal, system_action_attempts=attempts, system_action_component=getattr(self, 'system_component', None))
+        raise qa.Refused(code)
 
     def tap_system(self, action):
         self.report['step'] = 'system-' + action
+        self.system_component, attempts, refusal = None, 0, None
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             self.verify()
+            attempts += 1
             try:
                 observed = self.observe_system(action)
-            except qa.Refused:
+            except qa.Refused as error:
+                refusal = refusal_code(error)
                 time.sleep(1)
                 continue
             self.attest_system(observed['package'])
@@ -450,18 +519,31 @@ class ComponentDriver:
             self.device.call('shell', 'input', 'tap', *confirmed['center'])
             self.report['system_actions'].append({'action': action, 'package': observed['package'], 'component': observed['component'], 'system_apk_sha256': self.system_owners[observed['package']]['apk_sha256'], 'owned_app_label_rechecked': True, 'window_rechecked': True})
             return
-        raise qa.Refused('owned_system_action_timeout')
+        self.system_refused('owned_system_action_timeout', attempts, refusal)
 
     def return_from_permission(self):
-        self.verify()
-        tree = self.device.ui()
-        activity = self.device.call('shell', 'dumpsys', 'activity', 'activities')
-        component = resumed_component(activity)
-        qa.require(component in ('com.android.settings/.Settings$ManageExternalSourcesActivity', 'com.android.settings/com.android.settings.Settings$ManageExternalSourcesActivity'), 'source_settings_return_owner_required')
-        nodes = list(tree.iter('node'))
-        qa.require(len([n for n in nodes if n.get('package') == 'com.android.settings' and qa.ui_label(n).strip() == self.pair['stages']['1']['app_label']]) == 1, 'source_settings_app_label_changed')
-        qa.require(len([n for n in nodes if n.get('package') == 'com.android.settings' and n.get('checkable') == 'true' and n.get('checked') == 'true' and n.get('resource-id') in ('com.android.settings:id/switch_widget', 'android:id/switch_widget')]) == 1, 'source_settings_permission_not_checked')
-        self.attest_system('com.android.settings')
+        # The switch state follows an asynchronous app-op update, so the checked
+        # control is awaited for a bounded time; every check applies to the
+        # observation that is accepted.
+        self.report['step'] = 'system-permission-return'
+        self.system_component, attempts, refusal = None, 0, None
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            self.verify()
+            attempts += 1
+            self.system_component = None
+            try:
+                tree = self.device.ui()
+                component = self.system_component = diagnostic_component(self.device.call('shell', 'dumpsys', 'activity', 'activities'))
+                qa.require(component is not None, 'single_resumed_system_component_required')
+                source_permission_switch(tree, component, self.pair['stages']['1']['app_label'], 'true', 'source_settings_permission_not_checked')
+                break
+            except qa.Refused as error:
+                refusal = refusal_code(error)
+                time.sleep(1)
+        else:
+            self.system_refused('source_settings_return_timeout', attempts, refusal)
+        self.attest_system(SOURCE_SETTINGS_PACKAGE)
         self.device.capture('component-source-enabled')
         # Back only after the current owned Settings screen is proven, never
         # using the default App-only tap method for a foreign node.

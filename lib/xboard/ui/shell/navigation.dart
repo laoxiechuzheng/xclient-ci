@@ -4,6 +4,7 @@ import 'package:fl_clash/ui/surface.dart';
 import 'package:fl_clash/ui/typography.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../common/gradient.dart';
 import '../common/tokens.dart';
 
 class XcDestination {
@@ -254,7 +255,7 @@ class XcBrandMark extends StatelessWidget {
         : String.fromCharCode(title.trim().runes.first).toUpperCase();
     return ExcludeSemantics(
       child: DecoratedBox(
-        decoration: ShapeDecoration(
+        decoration: XcGradientDecoration(
           gradient: colors.accentGradient,
           shape: AppShape.all(AppCorner.fit(size) + 2),
           shadows: XcShadow.glow(colors.accent, strength: 0.6),

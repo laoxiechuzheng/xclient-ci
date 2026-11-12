@@ -11,6 +11,7 @@ import '../providers.dart';
 import 'common/components.dart';
 import 'common/errors.dart';
 import 'common/exit_action.dart';
+import 'common/gradient.dart';
 import 'common/motion.dart';
 import 'common/tokens.dart';
 import 'common/widgets.dart';
@@ -479,7 +480,8 @@ class _BrandPanel extends StatelessWidget {
     final colors = XcColors.of(context);
     const onBrand = Colors.white;
     return DecoratedBox(
-      decoration: BoxDecoration(
+      decoration: XcGradientDecoration(
+        shape: AppShape.none,
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,

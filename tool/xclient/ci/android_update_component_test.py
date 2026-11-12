@@ -183,6 +183,138 @@ class ComponentGuardTest(unittest.TestCase):
         driver.device.call.assert_called_once_with('shell', 'input', 'tap', 200, 100)
         self.assertEqual(len(driver.report['system_actions']), 1)
 
+    # The real uiautomator dump the API35 google_apis emulator produced on
+    # mirror run 43194965538: the SPA (Compose) "Install unknown apps" page.
+    SPA_PAGE = Path(__file__).with_name('testdata') / 'api35-install-unknown-apps.xml'
+    SPA_ACTIVITY = (b'  mResumedActivity: ActivityRecord{5d1c0e2 u0 com.android.settings/.spa.SpaActivity t14}\n'
+                    b'  topResumedActivity=ActivityRecord{5d1c0e2 u0 com.android.settings/.spa.SpaActivity t14}\n')
+
+    def spa_page(self):
+        return component.qa.ET.fromstring(self.SPA_PAGE.read_bytes())
+
+    @staticmethod
+    def spa_switch(tree):
+        return next(n for n in tree.iter('node') if n.get('checkable') == 'true')
+
+    def test_the_api35_spa_source_page_yields_one_tap_on_its_switch_row(self):
+        observed = component.system_action(self.spa_page(), self.SPA_ACTIVITY, 'permission', 'Example 加速器')
+        self.assertEqual(observed, dict(package='com.android.settings', component='com.android.settings/.spa.SpaActivity', center=(540, 994)))
+        full_name = self.SPA_ACTIVITY.replace(b'/.spa.', b'/com.android.settings.spa.')
+        self.assertEqual(component.system_action(self.spa_page(), full_name, 'permission', 'Example 加速器')['center'], (540, 994))
+
+    def test_the_spa_source_page_still_refuses_every_ambiguous_or_foreign_shape(self):
+        def two_switches(tree):
+            row = self.spa_switch(tree)
+            parent = next(p for p in tree.iter('node') if row in list(p))
+            parent.append(copy.deepcopy(row))
+
+        def nested_switch(tree):
+            row = self.spa_switch(tree)
+            inner = copy.deepcopy(row)
+            row.remove(row[0])
+            row.append(inner)
+
+        def drop(text):
+            def change(tree):
+                for parent in tree.iter('node'):
+                    for child in list(parent):
+                        if child.get('text') == text:
+                            parent.remove(child)
+            return change
+
+        def anr(tree):
+            tree.append(component.qa.ET.fromstring('<node package="android" class="android.widget.TextView" text="Settings isn\'t responding" enabled="true"/>'))
+
+        changes = {
+            'two_switches': two_switches,
+            'nested_switch': nested_switch,
+            'missing_switch_label': drop('Allow from this source'),
+            'missing_app_label': drop('Example 加速器'),
+            'missing_page_title': drop('Install unknown apps'),
+            'foreign_switch_package': lambda t: self.spa_switch(t).set('package', 'foreign.app'),
+            'foreign_switch_label_package': lambda t: self.spa_switch(t)[0].set('package', 'foreign.app'),
+            'already_checked': lambda t: self.spa_switch(t).set('checked', 'true'),
+            'disabled': lambda t: self.spa_switch(t).set('enabled', 'false'),
+            'not_clickable': lambda t: self.spa_switch(t).set('clickable', 'false'),
+            'switch_label_twice': lambda t: self.spa_switch(t).set('text', 'Allow from this source'),
+            'anr': anr,
+        }
+        for name, change in changes.items():
+            tree = self.spa_page()
+            change(tree)
+            with self.subTest(name), self.assertRaises(component.qa.Refused):
+                component.system_action(tree, self.SPA_ACTIVITY, 'permission', 'Example 加速器')
+        for activity in [self.SPA_ACTIVITY.replace(b'.spa.SpaActivity', b'.SubSettings'),
+                         self.SPA_ACTIVITY.replace(b'.spa.SpaActivity', b'.spa.SpaBridgeActivity'),
+                         self.SPA_ACTIVITY.replace(b'com.android.settings/', b'foreign.app/'),
+                         self.SPA_ACTIVITY.replace(b'.spa.SpaActivity', b'.Settings$ManageExternalSourcesActivity')]:
+            with self.subTest(activity=activity), self.assertRaises(component.qa.Refused):
+                component.system_action(self.spa_page(), activity, 'permission', 'Example 加速器')
+
+    def spa_driver(self, tree, activity):
+        driver = component.ComponentDriver.__new__(component.ComponentDriver)
+        driver.pair = self.pair()
+        driver.device = Mock()
+        driver.device.ui.return_value = tree
+        driver.device.call.side_effect = lambda *argv: activity if argv[:2] == ('shell', 'dumpsys') else b''
+        driver.device.capture.return_value = dict(width=1080, height=1920)
+        driver.verify = Mock()
+        driver.attest_system = Mock()
+        driver.system_owners = {'com.android.settings': {'apk_sha256': 'e' * 64}}
+        driver.report = {'system_actions': []}
+        return driver
+
+    def test_the_driver_taps_the_center_of_the_api35_spa_switch(self):
+        driver = self.spa_driver(self.spa_page(), self.SPA_ACTIVITY)
+        driver.tap_system('permission')
+        driver.device.call.assert_any_call('shell', 'input', 'tap', 540, 994)
+        self.assertEqual(driver.report['system_actions'][0]['component'], 'com.android.settings/.spa.SpaActivity')
+
+    def test_a_system_action_timeout_reports_its_last_refusal_component_and_attempts(self):
+        clock = iter(range(0, 1000, 7))
+        tree = self.spa_page()
+        self.spa_switch(tree).set('checked', 'true')
+        driver = self.spa_driver(tree, self.SPA_ACTIVITY)
+        with patch.object(component.time, 'monotonic', side_effect=lambda: next(clock)), patch.object(component.time, 'sleep'), \
+                self.assertRaisesRegex(component.qa.Refused, '^owned_system_action_timeout$'):
+            driver.tap_system('permission')
+        self.assertEqual(driver.report['step'], 'system-permission')
+        self.assertEqual(driver.report['system_action_last_refusal'], 'unique_system_action_required')
+        self.assertEqual(driver.report['system_action_component'], 'com.android.settings/.spa.SpaActivity')
+        self.assertEqual(driver.report['system_action_attempts'], 17)
+        self.assertNotIn(('shell', 'input', 'tap'), [c.args[:3] for c in driver.device.call.call_args_list])
+        # A dumpsys without one resumed record leaves the component unknown.
+        clock = iter(range(0, 1000, 7))
+        driver = self.spa_driver(self.spa_page(), b'no resumed record')
+        with patch.object(component.time, 'monotonic', side_effect=lambda: next(clock)), patch.object(component.time, 'sleep'), \
+                self.assertRaisesRegex(component.qa.Refused, '^owned_system_action_timeout$'):
+            driver.tap_system('install')
+        self.assertEqual(driver.report['system_action_last_refusal'], 'single_resumed_system_component_required')
+        self.assertIsNone(driver.report['system_action_component'])
+        self.assertNotIn('Example', json.dumps(driver.report, ensure_ascii=False))
+
+    def test_returning_from_the_spa_page_requires_the_same_switch_to_read_checked(self):
+        tree = self.spa_page()
+        self.spa_switch(tree).set('checked', 'true')
+        driver = self.spa_driver(tree, self.SPA_ACTIVITY)
+        driver.return_from_permission()
+        driver.device.call.assert_called_with('shell', 'input', 'keyevent', 'KEYCODE_BACK')
+        driver.device.capture.assert_called_once_with('component-source-enabled')
+        for change in [lambda t: self.spa_switch(t).set('checked', 'false'), lambda t: self.spa_switch(t)[0].set('text', 'Other'), lambda t: self.spa_switch(t).set('package', 'foreign.app')]:
+            clock = iter(range(0, 1000, 7))
+            tree = self.spa_page()
+            self.spa_switch(tree).set('checked', 'true')
+            change(tree)
+            driver = self.spa_driver(tree, self.SPA_ACTIVITY)
+            with patch.object(component.time, 'monotonic', side_effect=lambda: next(clock)), patch.object(component.time, 'sleep'), \
+                    self.assertRaises(component.qa.Refused):
+                driver.return_from_permission()
+            self.assertNotIn(('shell', 'input', 'keyevent', 'KEYCODE_BACK'), [c.args for c in driver.device.call.call_args_list])
+            self.assertEqual(driver.report['step'], 'system-permission-return')
+            self.assertEqual(driver.report['system_action_component'], 'com.android.settings/.spa.SpaActivity')
+            self.assertGreater(driver.report['system_action_attempts'], 1)
+            self.assertRegex(driver.report['system_action_last_refusal'], '^[a-z0-9_]+$')
+
     def signer_apk(self, certs, *, versions=('35.0.0', '37.0.0'), exit_code=0):
         sdk = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, sdk)

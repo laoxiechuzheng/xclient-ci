@@ -7,6 +7,7 @@ import '../../core/api/xboard_api.dart';
 import '../common/components.dart';
 import '../common/errors.dart';
 import '../common/format.dart';
+import '../common/gradient.dart';
 import '../common/commerce.dart';
 import '../common/tokens.dart';
 import '../common/widgets.dart';
@@ -237,7 +238,7 @@ class _ProfileCard extends StatelessWidget {
           spacing: XcSpace.md,
           children: [
             DecoratedBox(
-              decoration: ShapeDecoration(
+              decoration: XcGradientDecoration(
                 gradient: colors.accentGradient,
                 shape: AppShape.circle,
                 shadows: XcShadow.glow(colors.accent, strength: 0.4),

@@ -8,6 +8,7 @@ import 'package:fl_clash/ui/surface.dart';
 import 'package:fl_clash/ui/typography.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'gradient.dart';
 import 'motion.dart';
 import 'tokens.dart';
 
@@ -128,7 +129,7 @@ class XcButton extends StatelessWidget {
     );
     if (gradient) {
       button = DecoratedBox(
-        decoration: ShapeDecoration(
+        decoration: XcGradientDecoration(
           gradient: colors.accentGradient,
           shape: AppShape.full,
           shadows: XcShadow.glow(colors.accent, strength: 0.7),

@@ -22,12 +22,25 @@ class StartupProbeTest(unittest.TestCase):
         self.assertTrue(report['other_isolates_changed'])
         self.assertTrue(report['owned_forward_cleanup'])
 
-    def test_changed_vm_pid_start_or_main_isolate_is_still_refused(self):
+    def test_a_recomputed_vm_startTime_alone_does_not_change_the_vm(self):
         guest = {'pid': 321, 'start': '100'}
         vm = {'pid': 321, 'vm_start': 1000, 'main': {'id': 'isolates/1', 'number': '1', 'isolateGroupId': 'isolateGroups/1'}, 'isolate_ids': ['isolates/1']}
         isolate = {'type': 'Isolate', 'id': 'isolates/1', 'name': 'main'}
         messages = b'The Dart VM service is listening on http://127.0.0.1:4567/abcdefgh123=/\n'
-        for changed in ({**vm, 'pid': 999}, {**vm, 'vm_start': 2000}, {**vm, 'main': {**vm['main'], 'id': 'isolates/2'}}):
+        for start in (1001, 999, 6000):
+            channel = Mock()
+            channel.read.side_effect = [vm, {**vm, 'vm_start': start}]
+            with patch.object(probe.guard, 'VmChannel', return_value=channel), patch.object(probe.guard, 'guest_identity', return_value=guest), patch.object(probe, 'read_only_rpc', side_effect=[isolate, {'type': 'Stack'}]):
+                report = probe.observe(Mock(), guest, messages)
+            self.assertTrue(report['available'], start)
+            self.assertIsNone(report['error_class'])
+
+    def test_changed_vm_pid_or_main_isolate_is_still_refused(self):
+        guest = {'pid': 321, 'start': '100'}
+        vm = {'pid': 321, 'vm_start': 1000, 'main': {'id': 'isolates/1', 'number': '1', 'isolateGroupId': 'isolateGroups/1'}, 'isolate_ids': ['isolates/1']}
+        isolate = {'type': 'Isolate', 'id': 'isolates/1', 'name': 'main'}
+        messages = b'The Dart VM service is listening on http://127.0.0.1:4567/abcdefgh123=/\n'
+        for changed in ({**vm, 'pid': 999}, {**vm, 'main': {**vm['main'], 'id': 'isolates/2'}}, {**vm, 'main': {**vm['main'], 'number': '2'}}, {**vm, 'main': {**vm['main'], 'isolateGroupId': 'isolateGroups/2'}}):
             channel = Mock()
             channel.read.side_effect = [vm, changed]
             with patch.object(probe.guard, 'VmChannel', return_value=channel), patch.object(probe.guard, 'guest_identity', return_value=guest), patch.object(probe, 'read_only_rpc', side_effect=[isolate, {'type': 'Stack'}]):

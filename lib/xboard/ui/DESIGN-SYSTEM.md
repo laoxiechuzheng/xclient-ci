@@ -31,6 +31,7 @@
 - 表面：`page / card / block / inset / float`（对应 `SurfaceLevel`），`hairline` 分隔线。
 - 文字：`title`（onSurface）、`muted`（onSurfaceVariant）。
 - 品牌：`accent`（primary）、`onAccent`、`accentLight`（色相 −12、明度 +10~12）、`accentDeep`（色相 +16、明度 −12~14）、`accentGradient`（三者斜向渐变）、`accentSoft`（主色 10%/20% 叠在卡片上）。
+- 渐变绘制：三个及以上色标的渐变（`accentGradient`、登录页宽屏品牌面板、连接按钮的圆盘与进度环）一律经 `common/gradient.dart` 画——表面用 `XcGradientDecoration`（替代 `ShapeDecoration`，形状、柔光不变），`CustomPainter` 里用 `paintXcGradient`。原因：Android 模拟器的软件 GPU（SwiftShader，Impeller GLES 后端）会把跨越内部色标的 2×2 像素块着成第一段颜色，沿色标出现虚线接缝；逐区间分层（首段直接画，后续段在图层内以 `srcATop` 叠加）后每次只有一个区间，与单次渐变逐像素一致（`test/xboard/ui/gradient_test.dart`）。两色渐变照常用 `LinearGradient`。
 - 状态：`XcTone { neutral, accent, success, warning, danger }`。`toneOf` 用于文字；`vividOf` 提亮后用于描边、进度、图标；`softOf` 是图标底和徽章底；`washOf` 是阻断性提示的整块底色（深色明度 18、浅色明度 94，彩度封顶，不刺眼）。
 
 三个品牌（98k / mg / yzy）只是主色不同；`visual_test.dart` 用青、紫、琥珀三种种子色验证浅色/深色都成立。

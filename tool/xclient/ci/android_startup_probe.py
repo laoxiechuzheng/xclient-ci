@@ -66,7 +66,9 @@ def observe(device, guest, messages):
         stack = read_only_rpc(channel, 'getStack', isolate_id)
         check_owner()
         after = channel.read(guest['pid'])
-        guard.require(all(after[key] == vm[key] for key in ('pid', 'vm_start', 'main')), 'startup_vm_changed')
+        # getVM.startTime is recomputed per request (see guard.vm_start_delta), so
+        # the VM is the owned PID, rechecked guest birth and identical main.
+        guard.require(all(after[key] == vm[key] for key in ('pid', 'main')), 'startup_vm_changed')
         report['other_isolates_changed'] = after['isolate_ids'] != vm['isolate_ids']
         report.update(summary(isolate, stack, isolate_id), available=True, stack_observed=True)
     except (guard.ProofRefused, guard.VmUnavailable) as error:
