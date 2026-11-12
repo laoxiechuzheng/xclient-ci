@@ -11,11 +11,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'tab.dart';
 
 class ProxiesView extends ConsumerStatefulWidget {
-  const ProxiesView({super.key, this.picker = false});
+  const ProxiesView({super.key, this.picker = false, this.title});
 
   /// Leaves the bar only its search and delay test, for picking a proxy from a
   /// sheet.
   final bool picker;
+
+  /// Replaces the localized title, for a host that names the page itself.
+  final String? title;
 
   @override
   ConsumerState<ProxiesView> createState() => _ProxiesViewState();
@@ -172,7 +175,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
           ),
       ],
       menuItems: picker ? const [] : _buildMenuItems(context, style),
-      title: context.appLocalizations.proxies,
+      title: widget.title ?? context.appLocalizations.proxies,
       searchState: AppBarSearchState(onSearch: _onSearch),
       body: switch (style.type) {
         ProxiesType.tab => _tabView,

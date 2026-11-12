@@ -1,15 +1,62 @@
 import 'dart:async';
 
-import 'package:fl_clash/ui/typography.dart';
-import 'package:fl_clash/ui/shape.dart';
+import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../core/sync/subscription_sync.dart';
+import 'common/components.dart';
+import 'common/motion.dart';
+import 'common/tokens.dart';
 import 'common/widgets.dart';
 
 const _restrictionTitle = '节点获取受到限制';
 const _restrictionAdvice = '请关闭其他代理或更换网络后重新检查；如仍受限，请核对套餐状态或联系客服。';
 const _restrictionSafety = '客户端已禁止连接和使用旧节点。账户、套餐购买和工单仍可正常使用。';
+const _restrictionSteps = [
+  '关闭其他代理或 VPN 软件',
+  '更换网络，例如切换到移动数据',
+  '回到这里点“重新检查”；仍受限请核对套餐或联系客服',
+];
+
+class _Steps extends StatelessWidget {
+  const _Steps();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = XcColors.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: XcSpace.xs,
+      children: [
+        for (final (index, step) in _restrictionSteps.indexed)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: XcSpace.sm,
+            children: [
+              DecoratedBox(
+                decoration: ShapeDecoration(
+                  color: colors.softOf(XcTone.accent),
+                  shape: const CircleBorder(),
+                ),
+                child: SizedBox.square(
+                  dimension: 22,
+                  child: Center(
+                    child: Text(
+                      '${index + 1}',
+                      style: XcType.label(
+                        context,
+                      ).copyWith(color: colors.accent),
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(child: Text(step, style: XcType.body(context))),
+            ],
+          ),
+      ],
+    );
+  }
+}
 
 class XcRestrictionNotice extends StatefulWidget {
   const XcRestrictionNotice({
@@ -109,16 +156,22 @@ class _XcRestrictionNoticeState extends State<XcRestrictionNotice> {
           builder: (context) {
             _dialogContext = context;
             return AlertDialog(
+              icon: const XcGlyphWell(
+                glyph: AppGlyphs.vpn,
+                tone: XcTone.danger,
+                size: 56,
+              ),
               title: const Text(_restrictionTitle),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  spacing: 16,
+                  spacing: XcSpace.md,
                   children: [
-                    Text(_reason),
-                    const Text(_restrictionAdvice),
-                    const Text(_restrictionSafety),
+                    Text(_reason, style: XcType.body(context)),
+                    Text('可以这样做', style: XcType.label(context)),
+                    const _Steps(),
+                    Text(_restrictionSafety, style: XcType.caption(context)),
                   ],
                 ),
               ),
@@ -150,69 +203,96 @@ class _XcRestrictionNoticeState extends State<XcRestrictionNotice> {
     if (!_blocked) return const SizedBox.shrink();
     final wait = _seconds(widget.status.retryAt);
     final auto = _seconds(widget.status.nextSync);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Card(
-        elevation: 0,
-        color: Theme.of(context).colorScheme.errorContainer,
-        shape: AppShape.xl.copyWith(side: BorderSide.none),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            spacing: 8,
-            children: [
-              Text(_restrictionTitle, style: AppTextStyle.headline.of(context)),
-              Text(_reason, maxLines: 4, overflow: TextOverflow.ellipsis),
-              const Text(_restrictionSafety),
-              if (widget.status.cleanupWarning case final warning?)
-                Text(warning),
-              Text(
-                wait > 0
-                    ? '请等待 $wait 秒后再手动检查${auto > 0 ? '；约 $auto 秒后自动复查' : ''}'
-                    : auto > 0
-                    ? '约 $auto 秒后自动复查，也可在更换网络后手动检查'
-                    : '更换网络后可重新检查，连续操作至少间隔 10 秒',
-              ),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  XcTaskButton(
-                    label: '已更换网络，重新检查',
-                    enabled: wait == 0,
-                    action: widget.onCheck,
-                  ),
-                  TextButton(
-                    onPressed: widget.onPlans,
-                    child: const Text('账户与套餐'),
-                  ),
-                  TextButton(
-                    onPressed: widget.onTickets,
-                    child: const Text('联系客服'),
-                  ),
-                  TextButton(
-                    onPressed: () => xcPush(
-                      context,
-                      XcPage(
-                        title: _restrictionTitle,
-                        child: xcList([
-                          XcSection(
-                            children: [
-                              Text(_reason),
-                              const Text(_restrictionAdvice),
-                              const Text(_restrictionSafety),
-                            ],
+    final colors = XcColors.of(context);
+    return XcBannerSlot(
+      child: XcEntrance(
+        child: XcCallout(
+          tone: XcTone.danger,
+          filled: true,
+          glyph: AppGlyphs.vpn,
+          title: _restrictionTitle,
+          actions: [
+            XcTaskButton(
+              label: '已更换网络，重新检查',
+              size: XcButtonSize.small,
+              glyph: AppGlyphs.refresh,
+              enabled: wait == 0,
+              action: widget.onCheck,
+            ),
+            XcButton(
+              label: '查看详情',
+              size: XcButtonSize.small,
+              variant: XcButtonVariant.ghost,
+              onPressed: () => xcPush(
+                context,
+                XcPage(
+                  title: _restrictionTitle,
+                  child: xcList([
+                    XcPanel(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        spacing: XcSpace.md,
+                        children: [
+                          Text(_reason, style: XcType.body(context)),
+                          const _Steps(),
+                          Text(
+                            _restrictionAdvice,
+                            style: XcType.secondary(context),
                           ),
-                        ]),
+                          Text(
+                            _restrictionSafety,
+                            style: XcType.caption(context),
+                          ),
+                        ],
                       ),
                     ),
-                    child: const Text('查看详情'),
+                  ]),
+                ),
+              ),
+            ),
+            XcButton(
+              label: '联系客服',
+              size: XcButtonSize.small,
+              variant: XcButtonVariant.ghost,
+              onPressed: widget.onTickets,
+            ),
+            XcButton(
+              label: '账户与套餐',
+              size: XcButtonSize.small,
+              variant: XcButtonVariant.ghost,
+              onPressed: widget.onPlans,
+            ),
+          ],
+          children: [
+            Text(
+              _reason,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: XcType.body(context),
+            ),
+            Text(_restrictionSafety, style: XcType.caption(context)),
+            if (widget.status.cleanupWarning case final warning?)
+              Text(warning, style: XcType.caption(context)),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Row(
+                spacing: 6,
+                children: [
+                  GlyphIcon(AppGlyphs.clock, size: 14, color: colors.muted),
+                  Expanded(
+                    child: Text(
+                      wait > 0
+                          ? '请等待 $wait 秒后再手动检查${auto > 0 ? '；约 $auto 秒后自动复查' : ''}'
+                          : auto > 0
+                          ? '约 $auto 秒后自动复查，也可在更换网络后手动检查'
+                          : '更换网络后可重新检查，连续操作至少间隔 10 秒',
+                      style: XcType.caption(context),
+                    ),
                   ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -271,19 +351,41 @@ class _XcRestrictedNodesViewState extends State<XcRestrictedNodesView> {
   }
 
   @override
-  Widget build(BuildContext context) => xcList([
-    XcSection(
-      title: '暂时无法获取节点',
-      children: [
-        Text(widget.status.message ?? SyncMessages.blocked),
-        const Text(_restrictionAdvice),
-        const Text('服务器允许下发后才会重新显示节点，旧缓存不会用于连接。'),
-        XcTaskButton(
-          label: '已更换网络，重新检查',
-          enabled: _ready,
-          action: widget.onCheck,
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) => SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: constraints.maxHeight),
+        child: XcStateView(
+          tone: XcTone.danger,
+          glyph: AppGlyphs.vpn,
+          title: '暂时无法获取节点',
+          message: widget.status.message ?? SyncMessages.blocked,
+          action: XcTaskButton(
+            label: '已更换网络，重新检查',
+            glyph: AppGlyphs.refresh,
+            enabled: _ready,
+            action: widget.onCheck,
+          ),
+          children: [
+            const SizedBox(height: XcSpace.xl),
+            XcPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: XcSpace.md,
+                children: [
+                  Text('可以这样做', style: XcType.label(context)),
+                  const _Steps(),
+                  Text(
+                    '服务器允许下发后才会重新显示节点，旧缓存不会用于连接。',
+                    style: XcType.caption(context),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     ),
-  ]);
+  );
 }

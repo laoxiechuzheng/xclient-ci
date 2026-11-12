@@ -116,6 +116,28 @@ def base_defines(output):
     return json.loads((output / 'private/defines.json').read_text(encoding='utf-8'))
 
 
+class SignerRefused(qa.Refused):
+    def __init__(self, code, diagnostic):
+        super().__init__(code)
+        self.diagnostic = diagnostic
+
+
+# apksigner through build-tools 36 prints "Signer #1"; 37 names the scheme
+# that verified the APK ("V2 Signer:"), or "Signer #N:" for several signers.
+_DIGEST_LINE = re.compile(r'^(.*) certificate SHA-256 digest: (.*?)\s*$', re.M)
+_PRIMARY_SIGNER = re.compile(r'Signer #1|(?:V1 |V2 |V3\.0 )?Signer:')
+
+
+def signer_digest(certs, diagnostic):
+    """The one SHA-256 digest of the APK's only signer, from --print-certs."""
+    lines = _DIGEST_LINE.findall(certs.decode('utf-8', errors='replace')) if len(certs) <= 32768 else []
+    digests = [digest for _, digest in lines if re.fullmatch('[a-f0-9]{64}', digest)]
+    primary = [label for label, _ in lines if _PRIMARY_SIGNER.fullmatch(label)]
+    if len(certs) > 32768 or len(lines) != 1 or len(digests) != 1 or len(primary) != 1:
+        raise SignerRefused('single_component_signer_required', dict(diagnostic, apksigner_exit_code=0, output_bytes=len(certs), digest_lines=len(lines), primary_signer_lines=len(primary), distinct_digests=len(set(digests))))
+    return digests[0]
+
+
 def apk_info(state, path, stage):
     qa.validate_apk(path, 'profile')
     sdk = Path(state['sdk'])
@@ -127,11 +149,12 @@ def apk_info(state, path, stage):
     qa.require(len(labels) == 1, 'component_apk_label_required')
     signer_tool = qa.aapt_tool(sdk).with_name('apksigner')
     qa.require(signer_tool.is_file() and signer_tool.resolve().is_relative_to(sdk), 'sdk_apksigner_required')
-    certs = qa.command([signer_tool, 'verify', '--print-certs', path]).decode('ascii')
-    qa.require(len(certs) <= 32768, 'bounded_component_signer_required')
-    digests = re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([a-f0-9]{64})\s*$', certs, re.M)
-    qa.require(len(digests) == 1, 'single_component_signer_required')
-    return dict(sha256=qa.sha(path), size=path.stat().st_size, signer_sha256=digests[0], app_label=labels[0])
+    diagnostic = dict(stage=stage, build_tools=signer_tool.parent.name)
+    try:
+        certs = qa.command([signer_tool, 'verify', '--print-certs', path])
+    except qa.Refused as error:
+        raise SignerRefused('component_signer_tool_failed', dict(diagnostic, apksigner_exit_code=error.exit_code)) from None
+    return dict(sha256=qa.sha(path), size=path.stat().st_size, signer_sha256=signer_digest(certs, diagnostic), app_label=labels[0])
 
 
 def read_pair(state, output):
@@ -173,7 +196,11 @@ def build(args):
         load(args, qa.PRODUCER_JOB)
         source = qa.ROOT / 'build/app/outputs/flutter-apk/app-profile.apk'
         qa.require(source.is_file() and source.resolve() == source and source.stat().st_mtime_ns > started, 'fresh_component_apk_required')
-        info = apk_info(state, source, stage)
+        try:
+            info = apk_info(state, source, stage)
+        except SignerRefused as error:
+            qa.write_json(output / 'receipts/component-signer.json', error.diagnostic)
+            raise
         destination = output / 'private' / ('app-v' + stage + '.apk')
         with source.open('rb') as reader, destination.open('xb') as writer:
             shutil.copyfileobj(reader, writer, 1024 * 1024)
@@ -445,7 +472,10 @@ def main():
         {'build': build, 'export': export, 'import': import_pair}[args.action](args)
         return 0
     except Exception as error:
-        print(json.dumps({'success': False, 'error': str(error) if isinstance(error, qa.Refused) else type(error).__name__}))
+        report = {'success': False, 'error': str(error) if isinstance(error, qa.Refused) else type(error).__name__}
+        if isinstance(error, SignerRefused):
+            report['signer'] = error.diagnostic
+        print(json.dumps(report))
         return 1
 
 

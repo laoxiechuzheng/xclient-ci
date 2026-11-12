@@ -26,7 +26,9 @@ class ClashProvidersAction extends _$ClashProvidersAction {
     if (before != null &&
         (latest == null || latest.fileName != before.fileName)) {
       if (latest?.fileName != compiled.fileName) {
-        unawaited(_clearCache(compiled));
+        // A set put back on this url reuses the file name, so the stale
+        // download must be gone before the caller can act on the result.
+        await _clearCache(compiled);
       }
       return latest ?? compiled;
     }

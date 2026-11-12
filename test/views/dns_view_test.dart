@@ -1,4 +1,6 @@
+import 'package:drift/native.dart';
 import 'package:fl_clash/common/common.dart';
+import 'package:fl_clash/database/database.dart' show Database, database;
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/features/form/form.dart';
 import 'package:fl_clash/models/models.dart';
@@ -22,6 +24,19 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late ProviderContainer container;
+
+  // A custom profile's issues watch database-backed providers. In a shared
+  // test isolate the global database is whatever an earlier file left, and
+  // one failing every query keeps those providers retrying past the test.
+  setUp(() {
+    final previous = database;
+    final testDatabase = Database(NativeDatabase.memory());
+    database = testDatabase;
+    addTearDown(() async {
+      database = previous;
+      await testDatabase.close();
+    });
+  });
 
   Future<void> pumpView(WidgetTester tester, {bool profile = false}) async {
     tester.view.physicalSize = const Size(1200, 1000);

@@ -1,25 +1,30 @@
+import 'package:fl_clash/common/datetime.dart' show getTimeText;
 import 'package:fl_clash/providers/providers.dart' as app;
 import 'package:fl_clash/ui/icons/icons.dart';
-import 'package:fl_clash/ui/typography.dart';
-import 'package:fl_clash/ui/surface.dart';
-import 'package:fl_clash/views/proxies/proxies.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:fl_clash/ui/loading.dart';
 
 import '../providers.dart';
 import '../connection_gate.dart';
-import '../probe/region_classifier.dart';
 import 'account/account_pages.dart';
 import 'account/record_pages.dart';
 import 'account/support_pages.dart';
+import 'common/components.dart';
 import 'common/format.dart';
 import 'common/commerce.dart';
 import 'common/errors.dart';
+import 'common/motion.dart';
 import 'common/rich_content.dart';
+import 'common/tokens.dart';
 import 'common/widgets.dart';
+import 'home/home_panel.dart';
+import 'nodes_view.dart';
+import 'shell/navigation.dart';
 import 'store/store_pages.dart';
 import 'restriction_notice.dart';
+
+export 'home/home_panel.dart' show XcHomeData, XcHomePanel;
 
 /// Keeps panel money/configuration and post-purchase effects inside one login.
 /// The scope wraps the Navigator, including routes opened from the shell.
@@ -74,17 +79,15 @@ class _XcCommerceHostState extends ConsumerState<XcCommerceHost> {
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return Scaffold(
-            body: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                spacing: 12,
-                children: [
-                  Text(xcErrorText(snapshot.error!)),
-                  TextButton(
-                    onPressed: () => setState(() => _config = api.commConfig()),
-                    child: const Text('重试加载站点配置'),
-                  ),
-                ],
+            body: XcStateView(
+              tone: XcTone.danger,
+              glyph: AppGlyphs.wifiOff,
+              title: '站点配置没有加载出来',
+              message: '${xcErrorText(snapshot.error!)}。请检查网络后重试。',
+              action: XcButton(
+                label: '重试加载站点配置',
+                glyph: AppGlyphs.refresh,
+                onPressed: () => setState(() => _config = api.commConfig()),
               ),
             ),
           );
@@ -127,14 +130,17 @@ class _XcAppShellState extends ConsumerState<XcAppShell> {
         body: Center(child: CommonCircleLoading.page(semanticLabel: '正在加载')),
       );
     }
+    final block = ref.watch(xcConnectionBlockProvider);
     final body = switch (_index) {
       0 => XcHomePage(
         api: api,
         running: ref.watch(app.isStartProvider),
-        canConnect: ref.watch(xcConnectionBlockProvider) == null,
+        canConnect: block == null,
+        blockReason: block,
+        syncPhase: sync?.phase,
         selectedNodes: ref.watch(app.selectedMapProvider),
         syncMessage:
-            ref.watch(xcConnectionBlockProvider) ??
+            block ??
             sync?.message ??
             switch (sync?.phase) {
               SyncPhase.syncing => '正在安全同步节点…',
@@ -144,9 +150,11 @@ class _XcAppShellState extends ConsumerState<XcAppShell> {
         onConnect: () =>
             ref.read(app.commonActionProvider.notifier).toggleRunning(),
         onPlans: () => setState(() => _index = 2),
+        onNodes: () => setState(() => _index = 1),
         onSync: () async {
           await actions.syncNow();
         },
+        sessionTimer: const _XcSessionTimer(),
       ),
       1 =>
         sync?.phase == SyncPhase.blocked
@@ -156,7 +164,7 @@ class _XcAppShellState extends ConsumerState<XcAppShell> {
                   await actions.syncNow();
                 },
               )
-            : const ProxiesView(),
+            : const XcNodesView(),
       2 => XcPlansPage(api: api, embedded: true),
       _ => XcAccountPage(
         api: api,
@@ -171,11 +179,19 @@ class _XcAppShellState extends ConsumerState<XcAppShell> {
         settingsTiles: widget.settingsTiles,
       ),
     };
+    final (pageTitle, pageSubtitle) = switch (_index) {
+      2 => ('选购套餐', '支付成功后自动生效，可随时续费或升级'),
+      3 => ('我的账户', session.user?['email'] as String?),
+      _ => (null, null),
+    };
     return XcShellLayout(
       title: brand.displayName,
       selectedIndex: _index,
       onSelected: (index) => setState(() => _index = index),
+      pageTitle: pageTitle,
+      pageSubtitle: pageSubtitle,
       banner: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           XcRestrictionNotice(
             status: sync ?? const SyncStatus(),
@@ -186,41 +202,34 @@ class _XcAppShellState extends ConsumerState<XcAppShell> {
             onTickets: () => xcPush(context, XcTicketsPage(api: api)),
           ),
           XcNoticeBanner(notice: ref.watch(xcNoticeProvider)),
-          if (session.deviceError != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    spacing: 8,
-                    children: [
-                      Text(session.deviceError!.displayMessage),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          TextButton(
-                            onPressed: () => xcPush(
-                              context,
-                              XcDevicesPage(
-                                api: api,
-                                onLogout: actions.logout,
-                                onRegister: actions.registerDevice,
-                              ),
-                            ),
-                            child: const Text('管理登录设备'),
-                          ),
-                          XcTaskButton(
-                            label: '重试注册',
-                            tonal: true,
-                            action: actions.registerDevice,
-                          ),
-                        ],
-                      ),
-                    ],
+          if (session.deviceError case final error?)
+            XcBannerSlot(
+              child: XcCallout(
+                tone: XcTone.danger,
+                glyph: AppGlyphs.devices,
+                filled: true,
+                title: '这台设备还没有完成登记',
+                message: error.displayMessage,
+                actions: [
+                  XcTaskButton(
+                    label: '重试注册',
+                    size: XcButtonSize.small,
+                    action: actions.registerDevice,
                   ),
-                ),
+                  XcButton(
+                    label: '管理登录设备',
+                    size: XcButtonSize.small,
+                    variant: XcButtonVariant.ghost,
+                    onPressed: () => xcPush(
+                      context,
+                      XcDevicesPage(
+                        api: api,
+                        onLogout: actions.logout,
+                        onRegister: actions.registerDevice,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
         ],
@@ -228,6 +237,15 @@ class _XcAppShellState extends ConsumerState<XcAppShell> {
       child: body,
     );
   }
+}
+
+class _XcSessionTimer extends ConsumerWidget {
+  const _XcSessionTimer();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Text(
+    getTimeText(ref.watch(app.runTimeProvider)),
+    style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
+  );
 }
 
 class XcShellLayout extends StatelessWidget {
@@ -238,97 +256,121 @@ class XcShellLayout extends StatelessWidget {
     required this.onSelected,
     required this.child,
     this.banner,
+    this.pageTitle,
+    this.pageSubtitle,
   });
   final String title;
   final int selectedIndex;
   final ValueChanged<int> onSelected;
   final Widget child;
   final Widget? banner;
+  final String? pageTitle;
+  final String? pageSubtitle;
   static const labels = ['首页', '节点', '套餐', '我的'];
   static const glyphs = [
     AppGlyphs.dashboard,
     AppGlyphs.proxies,
     AppGlyphs.resources,
-    AppGlyphs.profiles,
+    AppGlyphs.account,
+  ];
+  static final destinations = [
+    for (var index = 0; index < labels.length; index++)
+      XcDestination(glyph: glyphs[index], label: labels[index]),
   ];
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final desktop = constraints.maxWidth >= 800;
-      return Scaffold(
-        backgroundColor: SurfaceLevel.page.colorOf(
-          Theme.of(context).colorScheme,
-        ),
-        appBar: AppBar(
-          title: Text(title, style: AppTextStyle.pageTitle.of(context)),
-        ),
-        body: Row(
-          children: [
-            if (desktop)
-              NavigationRail(
-                backgroundColor: SurfaceLevel.page.colorOf(
-                  Theme.of(context).colorScheme,
+      final desktop = constraints.maxWidth >= XcBreakpoint.desktop;
+      final colors = XcColors.of(context);
+      final content = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (banner case final banner?)
+            AnimatedSize(
+              duration: XcMotion.of(context, XcMotion.standard),
+              curve: XcMotion.emphasizedCurve,
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: constraints.maxHeight * 0.55,
                 ),
-                extended: constraints.maxWidth >= 1100,
-                selectedIndex: selectedIndex,
-                onDestinationSelected: onSelected,
-                destinations: [
-                  for (var index = 0; index < labels.length; index++)
-                    NavigationRailDestination(
-                      icon: GlyphIcon(glyphs[index]),
-                      selectedIcon: GlyphIcon(glyphs[index], fill: 1),
-                      label: Text(labels[index]),
-                    ),
-                ],
+                child: SingleChildScrollView(child: banner),
               ),
-            Expanded(
+            ),
+          Expanded(
+            child: XcPageSwitcher(
               child: Column(
+                key: ValueKey(selectedIndex),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (banner != null)
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: constraints.maxHeight * 0.55,
-                      ),
-                      child: SingleChildScrollView(child: banner!),
-                    ),
+                  if (pageTitle case final pageTitle?)
+                    _PageHeader(title: pageTitle, subtitle: pageSubtitle),
                   Expanded(child: child),
                 ],
               ),
             ),
+          ),
+        ],
+      );
+      if (!desktop) {
+        return Scaffold(
+          backgroundColor: colors.page,
+          body: SafeArea(bottom: false, child: content),
+          bottomNavigationBar: XcBottomNav(
+            destinations: destinations,
+            selectedIndex: selectedIndex,
+            onSelected: onSelected,
+          ),
+        );
+      }
+      return Scaffold(
+        backgroundColor: colors.page,
+        body: Row(
+          children: [
+            XcSideNav(
+              key: const Key('xc-side-nav'),
+              title: title,
+              destinations: destinations,
+              selectedIndex: selectedIndex,
+              onSelected: onSelected,
+              extended: constraints.maxWidth >= XcBreakpoint.wide,
+            ),
+            const VerticalDivider(width: 1, thickness: 1),
+            Expanded(child: SafeArea(left: false, child: content)),
           ],
         ),
-        bottomNavigationBar: desktop
-            ? null
-            : NavigationBar(
-                selectedIndex: selectedIndex,
-                onDestinationSelected: onSelected,
-                destinations: [
-                  for (var index = 0; index < labels.length; index++)
-                    NavigationDestination(
-                      icon: GlyphIcon(glyphs[index]),
-                      selectedIcon: GlyphIcon(glyphs[index], fill: 1),
-                      label: labels[index],
-                    ),
-                ],
-              ),
       );
     },
   );
 }
 
-class XcHomeData {
-  const XcHomeData({
-    required this.user,
-    required this.summary,
-    this.stats = const [],
-    this.notices = const [],
-    this.cycle,
-  });
-  final Map<String, dynamic> user;
-  final Map<String, dynamic> summary;
-  final List<int> stats;
-  final List<Map<String, dynamic>> notices;
-  final Map<String, dynamic>? cycle;
+class _PageHeader extends StatelessWidget {
+  const _PageHeader({required this.title, this.subtitle});
+  final String title;
+  final String? subtitle;
+  @override
+  Widget build(BuildContext context) {
+    final gutter = XcSpace.gutterOf(MediaQuery.sizeOf(context).width);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(gutter, XcSpace.lg, gutter, XcSpace.xs),
+      child: XcEntrance(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          spacing: 2,
+          children: [
+            Text(title, style: XcType.pageTitle(context)),
+            if (subtitle case final subtitle?)
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: XcType.secondary(context),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class XcHomePage extends StatefulWidget {
@@ -342,6 +384,10 @@ class XcHomePage extends StatefulWidget {
     required this.onConnect,
     required this.onPlans,
     required this.onSync,
+    this.onNodes,
+    this.syncPhase,
+    this.blockReason,
+    this.sessionTimer,
   });
   final XboardApi api;
   final bool running;
@@ -351,11 +397,17 @@ class XcHomePage extends StatefulWidget {
   final VoidCallback onConnect;
   final VoidCallback onPlans;
   final Future<void> Function() onSync;
+  final VoidCallback? onNodes;
+  final SyncPhase? syncPhase;
+  final String? blockReason;
+  final Widget? sessionTimer;
   @override
   State<XcHomePage> createState() => _XcHomePageState();
 }
 
 class _XcHomePageState extends State<XcHomePage> {
+  late Future<XcHomeData> _future = _load();
+
   Future<XcHomeData> _load() async {
     final data = await Future.wait<Object?>([
       widget.api.userInfo(),
@@ -373,182 +425,66 @@ class _XcHomePageState extends State<XcHomePage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) => XcLoad<XcHomeData>(
-    load: _load,
-    builder: (context, data, refresh) => XcHomePanel(
-      data: data,
-      running: widget.running,
-      canConnect: widget.canConnect,
-      selectedNodes: widget.selectedNodes,
-      syncMessage: widget.syncMessage,
-      onConnect: widget.onConnect,
-      onPlans: widget.onPlans,
-      onSync: () async {
-        await widget.onSync();
-        await refresh();
-      },
-      onOrders: () => xcPush(context, XcOrdersPage(api: widget.api)),
-      onTickets: () => xcPush(context, XcTicketsPage(api: widget.api)),
-      onNotices: () => xcPush(context, XcNoticesPage(api: widget.api)),
-      onCycle: () => xcPush(context, XcTrafficCyclePage(api: widget.api)),
-      onResetPackage: () async {
-        final id = XcFormat.toInt(data.summary['plan_id']);
-        if (id == null) return;
-        final plan = await widget.api.plan(id);
-        if (context.mounted) {
-          xcPush(
-            context,
-            XcPlanDetailPage(
-              api: widget.api,
-              plan: plan,
-              initialPeriod: PlanPeriod.reset,
-            ),
-          );
-        }
-      },
-    ),
-  );
-}
-
-class XcHomePanel extends StatelessWidget {
-  const XcHomePanel({
-    super.key,
-    required this.data,
-    required this.running,
-    required this.canConnect,
-    required this.selectedNodes,
-    required this.syncMessage,
-    required this.onConnect,
-    required this.onPlans,
-    required this.onSync,
-    required this.onOrders,
-    required this.onTickets,
-    required this.onNotices,
-    required this.onCycle,
-    required this.onResetPackage,
-  });
-  final XcHomeData data;
-  final bool running;
-  final bool canConnect;
-  final Map<String, String> selectedNodes;
-  final String syncMessage;
-  final VoidCallback onConnect;
-  final VoidCallback onPlans;
-  final Future<void> Function() onSync;
-  final VoidCallback onOrders;
-  final VoidCallback onTickets;
-  final VoidCallback onNotices;
-  final VoidCallback onCycle;
-  final Future<void> Function() onResetPackage;
-  @override
-  Widget build(BuildContext context) {
-    final summary = data.summary;
-    final plan = summary['plan'] is Map
-        ? Map<String, dynamic>.from(summary['plan'] as Map)
-        : <String, dynamic>{};
-    final used =
-        (XcFormat.toDouble(summary['u']) ?? 0) +
-        (XcFormat.toDouble(summary['d']) ?? 0);
-    final total = XcFormat.toDouble(summary['transfer_enable']) ?? 0;
-    final ratio = total > 0 ? (used / total).clamp(0.0, 1.0) : 0.0;
-    final current = data.cycle?['current'];
-    final reset = current is Map && current['ends_at'] != null
-        ? XcFormat.date(current['ends_at'])
-        : summary['next_reset_at'] != null
-        ? XcFormat.date(summary['next_reset_at'])
-        : '${summary['reset_day'] ?? '—'} 天后';
-    final stats = data.stats;
-    return xcList([
-      XcSection(
-        title: running ? '连接已开启' : '准备好，连接世界',
-        children: [
-          Text(syncMessage, style: AppTextStyle.callout.of(context)),
-          if (selectedNodes.isEmpty) const Text('节点同步后，请在“节点”中选择线路'),
-          for (final entry in selectedNodes.entries.take(3))
-            XcValue(entry.key, entry.value),
-          if (selectedNodes.values.firstOrNull case final name?
-              when classifyRegion(name) != null)
-            XcValue('当前地区', classifyRegion(name)),
-          FilledButton(
-            onPressed: running || canConnect ? onConnect : null,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(running ? '断开连接' : '连接'),
-            ),
-          ),
-          XcTaskButton(label: '同步节点', tonal: true, action: onSync),
-        ],
-      ),
-      XcSection(
-        title: '${plan['name'] ?? '尚未订购套餐'}',
-        children: [
-          XcValue(
-            '已用 / 总流量',
-            '${XcFormat.bytes(used)} / ${XcFormat.bytes(total)}',
-          ),
-          LinearProgressIndicator(
-            value: ratio,
-            color: ratio >= 0.8 ? Theme.of(context).colorScheme.error : null,
-          ),
-          XcValue(
-            '剩余流量',
-            XcFormat.bytes((total - used).clamp(0, double.infinity)),
-          ),
-          XcValue('到期时间', XcFormat.expiry(summary['expired_at'])),
-          XcValue('下次重置', reset),
-          XcValue(
-            '在线设备 / 限制',
-            '${summary['online_count'] ?? summary['alive_ip'] ?? 0} / ${summary['device_limit'] ?? '不限'}',
-          ),
-          if (summary['speed_limit'] != null)
-            XcValue('速率限制', '${summary['speed_limit']} Mbps'),
-          XcValue('账户余额', context.xcMoney(data.user['balance'])),
-          if (ratio >= 0.8) const Text('本期流量即将用尽，请留意剩余用量。'),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.tonal(
-                onPressed: onPlans,
-                child: const Text('购买 / 续费套餐'),
-              ),
-              TextButton(onPressed: onCycle, child: const Text('查看流量周期')),
-              if (XcPlans.resetPriceCents(plan) != null)
-                XcTaskButton(
-                  label: '购买流量重置包',
-                  tonal: true,
-                  action: onResetPackage,
-                ),
-            ],
-          ),
-        ],
-      ),
-      if (stats.isNotEmpty && stats[0] > 0 || stats.length > 1 && stats[1] > 0)
-        XcSection(
-          children: [
-            if (stats.isNotEmpty && stats[0] > 0)
-              XcMenuRow(title: '${stats[0]} 笔待支付订单', onTap: onOrders),
-            if (stats.length > 1 && stats[1] > 0)
-              XcMenuRow(title: '${stats[1]} 个未关闭工单', onTap: onTickets),
-          ],
-        ),
-      XcSection(
-        title: '最新公告',
-        children: [
-          if (data.notices.isEmpty) const Text('暂无公告'),
-          for (final notice in data.notices.take(1)) ...[
-            Text(
-              '${notice['title'] ?? '站点公告'}',
-              style: AppTextStyle.headline.of(context),
-            ),
-            XcRichContent(content: '${notice['content'] ?? ''}'),
-          ],
-          TextButton(onPressed: onNotices, child: const Text('查看全部公告')),
-        ],
-      ),
-    ]);
+  Future<void> _refresh() async {
+    if (!mounted) return;
+    final future = _load();
+    setState(() => _future = future);
+    try {
+      await future;
+    } catch (_) {}
   }
+
+  Future<void> _syncAndRefresh() async {
+    await widget.onSync();
+    await _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<XcHomeData>(
+    future: _future,
+    builder: (context, snapshot) {
+      final data = snapshot.data;
+      final done = snapshot.connectionState == ConnectionState.done;
+      return RefreshIndicator(
+        onRefresh: _syncAndRefresh,
+        child: XcHomePanel(
+          data: data,
+          error: done && snapshot.hasError ? snapshot.error : null,
+          onRetry: _refresh,
+          running: widget.running,
+          canConnect: widget.canConnect,
+          blockReason: widget.blockReason,
+          syncPhase: widget.syncPhase,
+          selectedNodes: widget.selectedNodes,
+          syncMessage: widget.syncMessage,
+          sessionTimer: widget.sessionTimer,
+          onConnect: widget.onConnect,
+          onPlans: widget.onPlans,
+          onNodes: widget.onNodes,
+          onSync: _syncAndRefresh,
+          onOrders: () => xcPush(context, XcOrdersPage(api: widget.api)),
+          onTickets: () => xcPush(context, XcTicketsPage(api: widget.api)),
+          onNotices: () => xcPush(context, XcNoticesPage(api: widget.api)),
+          onCycle: () => xcPush(context, XcTrafficCyclePage(api: widget.api)),
+          onResetPackage: () async {
+            final id = XcFormat.toInt(data?.summary['plan_id']);
+            if (id == null) return;
+            final plan = await widget.api.plan(id);
+            if (context.mounted) {
+              xcPush(
+                context,
+                XcPlanDetailPage(
+                  api: widget.api,
+                  plan: plan,
+                  initialPeriod: PlanPeriod.reset,
+                ),
+              );
+            }
+          },
+        ),
+      );
+    },
+  );
 }
 
 class XcNoticeBanner extends StatefulWidget {
@@ -566,32 +502,59 @@ class _XcNoticeBannerState extends State<XcNoticeBanner> {
     if (notice == null || _dismissed.contains(notice.id)) {
       return const SizedBox.shrink();
     }
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      child: Card(
-        elevation: 0,
-        color: SurfaceLevel.card.colorOf(Theme.of(context).colorScheme),
-        child: ListTile(
-          title: Text(
-            notice.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: const Text('查看公告详情'),
-          trailing: IconButton(
-            tooltip: '关闭公告',
-            icon: const GlyphIcon(AppGlyphs.close),
-            onPressed: () => setState(() => _dismissed.add(notice.id)),
-          ),
-          onTap: () => xcPush(
-            context,
-            XcPage(
-              title: notice.title,
-              child: xcList([
-                XcSection(children: [XcRichContent(content: notice.body)]),
-              ]),
+    final colors = XcColors.of(context);
+    final (tone, glyph) = switch (notice.level) {
+      'critical' => (XcTone.danger, AppGlyphs.error),
+      'warning' => (XcTone.warning, AppGlyphs.warning),
+      _ => (XcTone.accent, AppGlyphs.info),
+    };
+    return XcBannerSlot(
+      child: XcEntrance(
+        child: XcCallout(
+          tone: tone,
+          glyph: glyph,
+          title: notice.title,
+          dismissTooltip: '关闭公告',
+          onDismiss: () => setState(() => _dismissed.add(notice.id)),
+          children: [
+            Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                customBorder: XcRadius.control,
+                onTap: () => xcPush(
+                  context,
+                  XcPage(
+                    title: notice.title,
+                    child: xcList([
+                      XcSection(
+                        children: [XcRichContent(content: notice.body)],
+                      ),
+                    ]),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    spacing: 2,
+                    children: [
+                      Text(
+                        '查看公告详情',
+                        style: XcType.secondary(
+                          context,
+                        ).copyWith(color: colors.accent),
+                      ),
+                      GlyphIcon(
+                        AppGlyphs.chevronForward,
+                        size: 14,
+                        color: colors.accent,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );

@@ -41,6 +41,17 @@ void main() {
     test('accepts a path that is already gone', () async {
       await expectLater(safeDeletePath(join(root.path, 'missing')), completes);
     });
+
+    test('lets callers racing to delete one file all complete', () async {
+      final file = File(join(root.path, 'rules.list'))
+        ..writeAsStringSync('payload: []');
+
+      await expectLater(
+        Future.wait([for (var i = 0; i < 8; i++) file.safeDelete()]),
+        completes,
+      );
+      expect(file.existsSync(), isFalse);
+    });
   });
 
   group('writeAsStringAtomically', () {

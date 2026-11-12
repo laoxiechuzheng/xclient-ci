@@ -12,7 +12,7 @@ import 'package:fl_clash/xboard/update/download.dart';
 import 'package:fl_clash/xboard/update/install/android_installer.dart';
 import 'package:fl_clash/xboard/update/install/installer.dart';
 import 'package:fl_clash/xboard/update/update_exception.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;

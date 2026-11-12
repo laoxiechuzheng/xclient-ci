@@ -1,0 +1,494 @@
+name: xclient-release
+
+# Manual runs build packages for review; only pushed version tags publish.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Build version without v (no GitHub Release is published)'
+        default: '1.0.0-pre.1'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.47.6'
+  GO_VERSION: '1.27.1'
+  NDK_VERSION: r28c
+  CA_BUNDLE: cacert-2026-09-25.pem
+  CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+  BRANDS_REPOSITORY: laoxiechuzheng/xclient-brands
+
+jobs:
+  prepare:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      app_env: ${{ steps.version.outputs.app_env }}
+    steps:
+      - name: Parse the release version
+        id: version
+        shell: python
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+        run: |
+          import os, re, sys
+          tag = os.environ['TAG']
+          match = re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(alpha|beta|pre|rc)(?:\.([1-9][0-9]*))?)?', tag)
+          if not match:
+              sys.exit('Unsupported release tag')
+          major, minor, patch = map(int, match.group(1, 2, 3))
+          channel, serial = match.group(4, 5)
+          if major > 200 or minor > 99 or patch > 99:
+              sys.exit('Release version is out of range')
+          if channel is None:
+              stage = 999
+          elif channel == 'pre' and serial is None:
+              stage = 400
+          else:
+              if serial is None or int(serial) > (398 if channel == 'rc' else 199):
+                  sys.exit('Release stage is out of range')
+              stage = {'alpha': 0, 'beta': 200, 'pre': 400, 'rc': 600}[channel] + int(serial)
+          build = major * 10000000 + minor * 100000 + patch * 1000 + stage
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'version={tag[1:]}\nbuild={build}\n')
+              output.write(f'prerelease={str(channel is not None).lower()}\n')
+              output.write(f'app_env={"pre" if channel else "stable"}\n')
+
+  build:
+    name: ${{ matrix.brand }} ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        brand: ['98k', 'mg', 'yzy']
+        target: [android-arm64, android-arm, android-x64, windows, macos-arm64, macos-x64]
+        include:
+          - target: android-arm64
+            os: ubuntu-latest
+            platform: android
+            arch: arm64
+            abi: arm64-v8a
+          - target: android-arm
+            os: ubuntu-latest
+            platform: android
+            arch: arm
+            abi: armeabi-v7a
+          - target: android-x64
+            os: ubuntu-latest
+            platform: android
+            arch: amd64
+            abi: x86_64
+          - target: windows
+            os: windows-2022
+            platform: windows
+          # FlClash builds macOS for the host CPU only; macos-universal merges.
+          - target: macos-arm64
+            os: macos-15
+            platform: macos
+            arch: arm64
+          - target: macos-x64
+            os: macos-15-intel
+            platform: macos
+            arch: x64
+          # Secret name suffix for per-brand Android keystores.
+          - brand: '98k'
+            secret_suffix: 98K
+          - brand: 'mg'
+            secret_suffix: MG
+          - brand: 'yzy'
+            secret_suffix: YZY
+    defaults:
+      run:
+        shell: bash
+    env:
+      BRAND: ${{ matrix.brand }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      APP_ENV: ${{ needs.prepare.outputs.app_env }}
+    steps:
+      - name: Prepare Android runner disk
+        if: runner.os == 'Linux' && matrix.platform == 'android'
+        run: |
+          set -euo pipefail
+          df -h /
+          for directory in /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc; do
+            if [ -d "$directory" ]; then sudo du -sh "$directory"; fi
+          done
+          sudo rm -rf -- /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc
+          df -h /
+
+      - name: Enable git long paths (Windows)
+        if: matrix.platform == 'windows'
+        run: git config --global core.longpaths true
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Private brand data (brand.json + icon overlay) lands in brands/<id>/.
+      - name: Checkout brand data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ env.BRANDS_REPOSITORY }}
+          ssh-key: ${{ secrets.BRANDS_DEPLOY_KEY }}
+          path: brands
+          persist-credentials: false
+
+      # .gitmodules uses an SSH URL; fetch the public core over HTTPS instead.
+      - name: Checkout submodules
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Java
+        if: matrix.platform == 'android'
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        if: matrix.platform == 'android'
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: true
+
+      - name: Setup NDK
+        if: matrix.platform == 'android'
+        id: ndk
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1.6.0
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+          link-to-sdk: true
+
+      - name: Verify and share Android NDK
+        if: matrix.platform == 'android'
+        env:
+          XCLIENT_NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          ndk_revision="$(sed -n 's/^Pkg.Revision[[:space:]]*=[[:space:]]*//p' "$XCLIENT_NDK_PATH/source.properties" | tr -d '\r')"
+          required_revision="$(sed -n 's/^ndkVersion[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' android/gradle/libs.versions.toml)"
+          test -n "$required_revision"
+          if [ "$ndk_revision" != "$required_revision" ]; then
+            echo '::error::NDK action revision differs from the AGP pin'
+            exit 1
+          fi
+          if [ "$(realpath "${ANDROID_HOME:?}/ndk/$required_revision")" != "$(realpath "$XCLIENT_NDK_PATH")" ]; then
+            echo '::error::AGP SDK NDK and native-hook NDK are different installations'
+            exit 1
+          fi
+          for variable in ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_NDK_PATH ANDROID_NDK ANDROID_NDK_LATEST_HOME; do
+            printf '%s=%s\n' "$variable" "$XCLIENT_NDK_PATH" >> "$GITHUB_ENV"
+          done
+          printf 'Shared Android NDK revision: %s\n' "$ndk_revision"
+          df -h /
+
+      - name: Remove unused preinstalled Android NDKs
+        if: matrix.platform == 'android'
+        env:
+          XCLIENT_NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          ndk_root="$(realpath "${ANDROID_HOME:?}/ndk")"
+          selected="$(realpath "$XCLIENT_NDK_PATH")"
+          for directory in "$ndk_root"/*; do
+            [ -e "$directory" ] || continue
+            revision="$(basename "$directory")"
+            if [[ "$revision" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$(realpath "$directory")" != "$selected" ]; then
+              du -sh "$directory"
+              sudo rm -rf -- "$directory"
+            fi
+          done
+          test "$(realpath "${ANDROID_HOME:?}/ndk/$(sed -n 's/^Pkg.Revision[[:space:]]*=[[:space:]]*//p' "$XCLIENT_NDK_PATH/source.properties" | tr -d '\r')")" = "$selected"
+          df -h /
+
+      - name: Setup Xcode
+        if: matrix.platform == 'macos'
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app || sudo xcode-select -s /Applications/Xcode_26.2.app
+          xcodebuild -version
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: false
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Fetch CA certificates
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          if command -v sha256sum >/dev/null; then
+            echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+          else
+            echo "$CA_BUNDLE_SHA256  $bundle" | shasum -a 256 -c -
+          fi
+
+      - name: Apply brand
+        run: dart tool/xclient/brand_apply.dart "$BRAND" --version "$VERSION"
+
+      - name: Build Android
+        if: matrix.platform == 'android'
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          XCLIENT_BRAND: ${{ matrix.brand }}
+          XCLIENT_REQUIRE_RELEASE_SIGNING: 'true'
+          XCLIENT_KEYSTORE_B64: ${{ secrets[format('XCLIENT_KEYSTORE_B64_{0}', matrix.secret_suffix)] || secrets.XCLIENT_KEYSTORE_B64 }}
+          XCLIENT_KEYSTORE_PASSWORD: ${{ secrets[format('XCLIENT_KEYSTORE_PASSWORD_{0}', matrix.secret_suffix)] || secrets.XCLIENT_KEYSTORE_PASSWORD }}
+          XCLIENT_KEY_ALIAS: ${{ secrets[format('XCLIENT_KEY_ALIAS_{0}', matrix.secret_suffix)] || secrets.XCLIENT_KEY_ALIAS }}
+          XCLIENT_KEY_PASSWORD: ${{ secrets[format('XCLIENT_KEY_PASSWORD_{0}', matrix.secret_suffix)] || secrets.XCLIENT_KEY_PASSWORD }}
+        run: |
+          dart setup.dart android --arch '${{ matrix.arch }}' --env "$APP_ENV" -v
+          dart tool/xclient/collect_artifacts.dart --brand "$BRAND" --version "$VERSION" \
+            --platform android --android-abi '${{ matrix.abi }}' --from dist --to out
+          apk="out/$BRAND-android-${{ matrix.abi }}-v$VERSION.apk"
+          test -s "$apk"
+          for library in libflutter.so libapp.so libclash.so librust_api.so; do
+            unzip -Z1 "$apk" | grep -Fx "lib/${{ matrix.abi }}/$library"
+          done
+          signer="$(find "${ANDROID_HOME:?}/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$signer"
+          "$signer" verify --verbose "$apk"
+
+      - name: Android disk usage
+        if: always() && runner.os == 'Linux' && matrix.platform == 'android'
+        run: |
+          df -h /
+          for directory in "$HOME/.rustup" "$HOME/.cargo" "$HOME/.cache/go-build" "$HOME/go/pkg/mod" "$HOME/.gradle/caches" "${ANDROID_HOME:?}/ndk" "$RUNNER_TOOL_CACHE/ndk" build; do
+            if [ -d "$directory" ]; then du -sh "$directory"; fi
+          done
+
+      - name: Build Windows
+        if: matrix.platform == 'windows'
+        run: |
+          dart setup.dart windows --targets exe --env "$APP_ENV" -v
+          dart tool/xclient/collect_artifacts.dart --brand "$BRAND" --version "$VERSION" \
+            --platform windows --from dist --to out
+
+      # The universal app carries one Info.plist, and Intel needs Impeller off
+      # (see .agents/flutter-upgrade.md), so both slices build with it off.
+      - name: Build macOS slice
+        if: matrix.platform == 'macos'
+        run: |
+          plutil -replace FLTEnableImpeller -bool NO macos/Runner/Info.plist
+          jq --arg env "$APP_ENV" '. + {APP_ENV: $env}' xclient_defines.json > env.json
+          flutter build macos --release --dart-define-from-file=env.json -v
+          apps=(build/macos/Build/Products/Release/*.app)
+          if [ ${#apps[@]} -ne 1 ]; then
+            echo "::error::expected one .app, found ${apps[*]}"
+            exit 1
+          fi
+          mkdir -p out
+          ditto -c -k --sequesterRsrc --keepParent "${apps[0]}" "out/app-${{ matrix.arch }}.zip"
+
+      - name: Upload packages
+        if: matrix.platform != 'macos'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: xclient-pkg-${{ matrix.brand }}-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload macOS slice
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: xclient-app-${{ matrix.brand }}-macos-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 3
+
+  macos-universal:
+    name: ${{ matrix.brand }} macos-universal
+    needs: [prepare, build]
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        brand: ['98k', 'mg', 'yzy']
+    env:
+      BRAND: ${{ matrix.brand }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download slices
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: xclient-app-${{ matrix.brand }}-macos-*
+          path: slices
+          merge-multiple: true
+
+      - name: Merge, sign ad hoc and package
+        run: |
+          mkdir -p arm64 x64 out
+          ditto -x -k slices/app-arm64.zip arm64
+          ditto -x -k slices/app-x64.zip x64
+          arm_app="$(find arm64 -maxdepth 1 -name '*.app' | head -n 1)"
+          x64_app="$(find x64 -maxdepth 1 -name '*.app' | head -n 1)"
+          name="$(basename "$arm_app" .app)"
+          bash tool/xclient/macos_universal.sh "$arm_app" "$x64_app" out \
+            "$BRAND" "$VERSION" "$name" macos/Runner/Release.entitlements
+
+      - name: Upload packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: xclient-pkg-${{ matrix.brand }}-macos
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  facts:
+    name: Sign and verify package facts
+    needs: [prepare, build, macos-universal]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: v${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Checkout brand data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ env.BRANDS_REPOSITORY }}
+          ssh-key: ${{ secrets.BRANDS_DEPLOY_KEY }}
+          path: brands
+          persist-credentials: false
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: false
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Signing needs no native assets; keep dart from building the core.
+      - name: Skip native build hooks
+        run: yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
+
+      - name: Download packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: xclient-pkg-*
+          path: dist
+          merge-multiple: true
+
+      # The seed never reaches the command line or the log; xsign reads it
+      # from the environment and the verify step checks it against the
+      # rel_pub_keys the apps were built with.
+      - name: Sign release facts
+        env:
+          XCLIENT_REL_SEED: ${{ secrets.XCLIENT_REL_SEED }}
+          XCLIENT_REL_KID: ${{ vars.XCLIENT_REL_KID || 'rel-1' }}
+        run: |
+          for brand in 98k mg yzy; do
+            for abi in arm64-v8a armeabi-v7a x86_64; do
+              test -s "dist/$brand-android-$abi-v$VERSION.apk"
+            done
+            bases=()
+            while IFS= read -r base; do
+              [ -n "$base" ] && bases+=("$base")
+            done < <(jq -r '.release_url_bases[]?' "brands/$brand/brand.json")
+            if [ ${#bases[@]} -eq 0 ]; then
+              echo '::error::Brand release URL bases are missing'
+              exit 1
+            fi
+            dart tool/xclient/xsign.dart sign-release "$brand" "$VERSION" dist \
+              "${bases[@]}" --kid "$XCLIENT_REL_KID"
+            dart tool/xclient/xsign.dart verify "dist/$brand-release-v$VERSION.json" \
+              "brands/$brand/brand.json" > /dev/null
+          done
+
+      - name: Checksums and notes
+        run: |
+          (cd dist && sha256sum -- * > SHA256SUMS.txt)
+          {
+            echo "XClient $TAG"
+            echo
+            echo "基于 FlClash v0.9.2（GPL-3.0）修改。"
+            echo "源码提交：$GITHUB_SHA"
+            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+              echo "本次为私有测试构建，未创建版本标签或发布 Release。"
+            else
+              echo "源码标签：$TAG"
+            fi
+            echo
+            echo '| 文件 | 大小 |'
+            echo '|---|---|'
+            for file in dist/*; do
+              echo "| $(basename "$file") | $(stat -c %s "$file") |"
+            done
+          } > release-notes.md
+          ls -l dist
+
+      - name: Upload signed packages and notes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: xclient-signed-packages
+          path: |
+            dist/*
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish version tag
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, facts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download signed packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: xclient-signed-packages
+          path: signed
+
+      - name: Publish
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: signed/release-notes.md
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          files: signed/dist/*
+          fail_on_unmatched_files: true

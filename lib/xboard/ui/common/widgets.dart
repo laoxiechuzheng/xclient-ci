@@ -9,7 +9,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:fl_clash/ui/loading.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'components.dart';
 import 'errors.dart';
+import 'tokens.dart';
 
 Future<bool> xcOpenExternal(Uri uri) async {
   if (uri.scheme != 'https' || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
@@ -143,11 +145,19 @@ class XcTaskButton extends StatefulWidget {
     required this.action,
     this.tonal = false,
     this.enabled = true,
+    this.variant,
+    this.size = XcButtonSize.medium,
+    this.glyph,
+    this.expand = false,
   });
   final String label;
   final Future<void> Function() action;
   final bool tonal;
   final bool enabled;
+  final XcButtonVariant? variant;
+  final XcButtonSize size;
+  final Glyph? glyph;
+  final bool expand;
   @override
   State<XcTaskButton> createState() => _XcTaskButtonState();
 }
@@ -167,27 +177,17 @@ class _XcTaskButtonState extends State<XcTaskButton> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final label = _busy
-        ? Row(
-            mainAxisSize: MainAxisSize.min,
-            spacing: 10,
-            children: [
-              const CommonCircleLoading(size: 16, semanticLabel: '处理中'),
-              Text(widget.label),
-            ],
-          )
-        : Text(widget.label);
-    return widget.tonal
-        ? FilledButton.tonal(
-            onPressed: widget.enabled && !_busy ? _run : null,
-            child: label,
-          )
-        : FilledButton(
-            onPressed: widget.enabled && !_busy ? _run : null,
-            child: label,
-          );
-  }
+  Widget build(BuildContext context) => XcButton(
+    label: widget.label,
+    loading: _busy,
+    glyph: widget.glyph,
+    size: widget.size,
+    expand: widget.expand,
+    variant:
+        widget.variant ??
+        (widget.tonal ? XcButtonVariant.secondary : XcButtonVariant.primary),
+    onPressed: widget.enabled ? _run : null,
+  );
 }
 
 class XcLoad<T> extends StatefulWidget {
@@ -238,20 +238,16 @@ class _XcLoadState<T> extends State<XcLoad<T>> {
         );
       }
       if (snapshot.hasError) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              spacing: 16,
-              children: [
-                Text(xcErrorText(snapshot.error!)),
-                FilledButton.tonal(
-                  onPressed: _refresh,
-                  child: const Text('重试'),
-                ),
-              ],
-            ),
+        return XcStateView(
+          tone: XcTone.danger,
+          glyph: AppGlyphs.wifiOff,
+          title: '内容没有加载出来',
+          message: xcErrorText(snapshot.error!),
+          action: XcButton(
+            label: '重试',
+            variant: XcButtonVariant.secondary,
+            glyph: AppGlyphs.refresh,
+            onPressed: _refresh,
           ),
         );
       }
@@ -262,12 +258,15 @@ class _XcLoadState<T> extends State<XcLoad<T>> {
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             children: [
-              Padding(
-                padding: const EdgeInsets.all(40),
-                child: Center(child: Text(widget.emptyText)),
-              ),
-              Center(
-                child: TextButton(onPressed: _refresh, child: const Text('刷新')),
+              XcStateView(
+                glyph: AppGlyphs.layers,
+                title: widget.emptyText,
+                message: '下拉或点击刷新，获取最新内容',
+                action: XcButton(
+                  label: '刷新',
+                  variant: XcButtonVariant.secondary,
+                  onPressed: _refresh,
+                ),
               ),
             ],
           ),

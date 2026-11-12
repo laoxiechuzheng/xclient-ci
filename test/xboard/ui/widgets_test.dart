@@ -1070,7 +1070,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(NavigationRail), findsOneWidget);
+      expect(find.byKey(const Key('xc-side-nav')), findsOneWidget);
       expect(find.text('我的'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await _save(tester, key, 'desktop-shell');

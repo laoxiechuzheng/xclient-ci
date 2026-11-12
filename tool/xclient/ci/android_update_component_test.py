@@ -182,6 +182,80 @@ class ComponentGuardTest(unittest.TestCase):
         driver.device.call.assert_called_once_with('shell', 'input', 'tap', 200, 100)
         self.assertEqual(len(driver.report['system_actions']), 1)
 
+    def signer_apk(self, certs, *, versions=('35.0.0', '37.0.0'), exit_code=0):
+        sdk = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, sdk)
+        for version in versions:
+            for tool in ('aapt2', 'apksigner'):
+                (sdk / 'build-tools' / version).mkdir(parents=True, exist_ok=True)
+                (sdk / 'build-tools' / version / tool).write_bytes(b'')
+        apk = sdk / 'app-profile.apk'
+        apk.write_bytes(b'apk')
+        badging = ("package: name='com.xclient.example' versionCode='10000402' versionName='1.0.0-pre.2'\n"
+                   "launchable-activity: name='com.follow.clash.MainActivity'\napplication-debuggable\n"
+                   "application-label:'Example'\n").encode()
+        tools = []
+
+        def command(argv, **_):
+            tools.append(Path(argv[0]))
+            if Path(argv[0]).name == 'aapt2':
+                return badging
+            if exit_code:
+                raise component.qa.Refused('owned_command_failed', exit_code)
+            return certs.encode()
+
+        with patch.object(component.qa, 'validate_apk'), patch.object(component.qa, 'command', side_effect=command):
+            try:
+                return component.apk_info(dict(sdk=str(sdk)), apk, '2')
+            finally:
+                self.assertEqual([tool.parent.name for tool in tools][-1:], [versions[-1]])
+
+    def test_signer_digest_reads_apksigner_output_before_and_after_build_tools_37(self):
+        digest = 'ab' * 32
+        for certs in (
+            f'Signer #1 certificate DN: C=US, O=Android, CN=Android Debug\nSigner #1 certificate SHA-256 digest: {digest}\n'
+            f'Signer #1 certificate SHA-1 digest: {"cd" * 20}\nSigner #1 certificate MD5 digest: {"ef" * 16}\n',
+            f'V2 Signer: certificate DN: C=US, O=Android, CN=Android Debug\nV2 Signer: certificate SHA-256 digest: {digest}\n'
+            f'V2 Signer: certificate SHA-1 digest: {"cd" * 20}\nV2 Signer: certificate MD5 digest: {"ef" * 16}\n',
+            f'V3.0 Signer: certificate SHA-256 digest: {digest}\r\n',
+            f'V1 Signer: certificate SHA-256 digest: {digest}\n',
+            f'Signer: certificate SHA-256 digest: {digest}\n',
+        ):
+            with self.subTest(certs=certs.split(':')[0]):
+                self.assertEqual(self.signer_apk(certs)['signer_sha256'], digest)
+
+    def test_signer_digest_refuses_all_but_exactly_one_primary_signer_with_bounded_diagnostics(self):
+        one, two = 'ab' * 32, 'cd' * 32
+        cases = {
+            '': (0, 0, 0),
+            f'Signer #1 certificate SHA-256 digest: {one}\nSigner #2 certificate SHA-256 digest: {two}\n': (2, 1, 2),
+            f'V2 Signer #1: certificate SHA-256 digest: {one}\nV2 Signer #2: certificate SHA-256 digest: {two}\n': (2, 0, 2),
+            f'V2 Signer: certificate SHA-256 digest: {one}\nV2 Signer: certificate SHA-256 digest: {one}\n': (2, 2, 1),
+            f'V2 Signer: certificate SHA-256 digest: {one}\nSource Stamp Signer: certificate SHA-256 digest: {two}\n': (2, 1, 2),
+            f'V3.1 Signer (minSdkVersion=33): certificate SHA-256 digest: {one}\n': (1, 0, 1),
+            f'V2 Signer: certificate SHA-256 digest: {one.upper()}\n': (1, 1, 0),
+            f'V2 Signer: certificate SHA-256 digest: {one}\n' + 'x' * 32768: (0, 0, 0),
+        }
+        for certs, (lines, primary, distinct) in cases.items():
+            with self.subTest(certs=certs[:60]):
+                with self.assertRaisesRegex(component.SignerRefused, '^single_component_signer_required$') as caught:
+                    self.signer_apk(certs)
+                self.assertEqual(caught.exception.diagnostic, dict(stage='2', build_tools='37.0.0', apksigner_exit_code=0, output_bytes=len(certs.encode()), digest_lines=lines, primary_signer_lines=primary, distinct_digests=distinct))
+                self.assertNotRegex(json.dumps(caught.exception.diagnostic), '[a-fA-F0-9]{32}')
+
+    def test_failed_apksigner_reports_its_exit_code_and_build_tools_without_output(self):
+        with self.assertRaisesRegex(component.SignerRefused, '^component_signer_tool_failed$') as caught:
+            self.signer_apk('', versions=('36.1.0',), exit_code=1)
+        self.assertEqual(caught.exception.diagnostic, dict(stage='2', build_tools='36.1.0', apksigner_exit_code=1))
+
+    def test_signer_refusal_is_printed_with_its_diagnostic(self):
+        diagnostic = dict(stage='1', build_tools='37.0.0', apksigner_exit_code=0, output_bytes=0, digest_lines=0, primary_signer_lines=0, distinct_digests=0)
+        with patch.object(component, 'build', side_effect=component.SignerRefused('single_component_signer_required', diagnostic)), \
+                patch.object(sys, 'argv', ['android_update_component.py', 'build', '--state', 'state.json']), \
+                patch('builtins.print') as printed:
+            self.assertEqual(component.main(), 1)
+        self.assertEqual(json.loads(printed.call_args.args[0]), {'success': False, 'error': 'single_component_signer_required', 'signer': diagnostic})
+
     def test_paired_export_import_keeps_bytes_and_artifact_owner_separate(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()

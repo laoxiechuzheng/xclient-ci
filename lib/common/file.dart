@@ -72,7 +72,13 @@ extension FileSystemEntityExt on FileSystemEntity {
     if (!await exists()) {
       return;
     }
-    await delete(recursive: recursive);
+    try {
+      await delete(recursive: recursive);
+    } on FileSystemException {
+      // Another caller removed it after the check. Windows reports access
+      // denied, not a missing path, while that caller's delete is pending.
+      if (await exists()) rethrow;
+    }
   }
 }
 

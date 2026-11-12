@@ -25,3 +25,7 @@ the same central cooldown and admission retry schedule.
 session route disposal, configured currencies, and mobile/desktop rendering.
 Set `XC_UI_SCREENSHOTS` to a local directory to retain the rendering evidence.
 Tests render fake data without starting the network core or system proxy.
+
+Visual conventions, tokens, components and motion rules are in `DESIGN-SYSTEM.md`.
+`test/xboard/ui/visual_test.dart` renders every core screen at four sizes in light
+and dark themes; with `XC_UI_SCREENSHOTS` set it also writes the screenshots.
