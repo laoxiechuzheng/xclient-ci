@@ -27,10 +27,11 @@ Widget buildManagerStack({
   required Future<void> Function(List<ConnectivityResult> results)
   onConnectivityChanged,
   Stream<ProcessSignal>? terminateSignals,
+  Provider<bool>? fullWindowPage,
   required Widget child,
 }) {
   final platformApp = isDesktop
-      ? WindowHeaderContainer(child: child)
+      ? WindowHeaderContainer(fullWindowPage: fullWindowPage, child: child)
       : VpnManager(child: child);
   final state = AppStateManager(
     child: CoreManager(
@@ -197,6 +198,9 @@ class ApplicationState extends ConsumerState<Application> {
                 isDesktop: system.isDesktop,
                 onConnectivityChanged: _handleConnectivityChanged,
                 terminateSignals: _terminateSignals,
+                fullWindowPage: BrandConfig.isBranded
+                    ? xcFullWindowPageProvider
+                    : null,
                 child: RemoteFocusAdapter(
                   enabled: system.isTV,
                   floatingKeyboard: app?.floatingKeyboard,
@@ -206,9 +210,7 @@ class ApplicationState extends ConsumerState<Application> {
             );
           },
           scrollBehavior: const BaseScrollBehavior(),
-          title: BrandConfig.isBranded
-              ? BrandConfig.fromEnvironment().displayName
-              : appName,
+          title: appDisplayName,
           locale: getLocaleForString(locale),
           supportedLocales: AppLocalizations.delegate.supportedLocales,
           themeMode: themeProps.themeMode,

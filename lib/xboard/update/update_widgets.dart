@@ -304,6 +304,7 @@ class XcUpdatePanel extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: onClose,
+          style: TextButton.styleFrom(visualDensity: VisualDensity.standard),
           child: Text(state.isBusy ? '后台更新' : '稍后'),
         ),
         if (state.phase == XcUpdatePhase.needsPermission)

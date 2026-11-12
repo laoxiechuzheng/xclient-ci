@@ -9,6 +9,7 @@ import 'package:fl_clash/ui/surface.dart';
 import 'package:fl_clash/ui/typography.dart';
 import 'package:fl_clash/xboard/core/sync/subscription_sync.dart';
 import 'package:fl_clash/xboard/ui/shell.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,12 +22,15 @@ const xcSeed = Color(0xff007aff);
 enum XcShotSize {
   phone(Size(390, 844), 1.5),
   small(Size(360, 740), 1.5),
-  desktop(Size(1280, 800), 1),
-  wide(Size(1920, 1080), 1);
+  desktop(Size(1280, 800), 1, TargetPlatform.windows),
+  wide(Size(1920, 1080), 1, TargetPlatform.windows);
 
-  const XcShotSize(this.size, this.ratio);
+  const XcShotSize(this.size, this.ratio, [this.platform]);
   final Size size;
   final double ratio;
+
+  /// Desktop sizes render as Windows, where Material defaults to compact.
+  final TargetPlatform? platform;
 
   static const core = [phone, desktop];
 }
@@ -45,11 +49,13 @@ ThemeData xcTheme(Brightness brightness, {Color seed = xcSeed}) {
 
 Widget xcApp(
   Widget child, {
+  Key? key,
   Brightness brightness = Brightness.light,
   Color seed = xcSeed,
   bool reduceMotion = false,
   bool localized = false,
 }) => MaterialApp(
+  key: key,
   debugShowCheckedModeBanner: false,
   themeAnimationStyle: AnimationStyle.noAnimation,
   theme: xcTheme(brightness, seed: seed),
@@ -88,6 +94,7 @@ Future<void> xcLoadFonts() async {
 }
 
 void xcView(WidgetTester tester, XcShotSize size) {
+  debugDefaultTargetPlatformOverride = size.platform;
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size.size;
   addTearDown(tester.view.resetPhysicalSize);
@@ -124,10 +131,17 @@ void xcVisual(String description, WidgetTesterCallback body) =>
         await body(tester);
       } finally {
         debugDisableShadows = true;
+        debugDefaultTargetPlatformOverride = null;
       }
     });
 
+Future<void> xcPrime(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump();
+}
+
 Future<void> xcSettle(WidgetTester tester) async {
+  await xcPrime(tester);
   for (var frame = 0; frame < 4; frame++) {
     await tester.pump(const Duration(milliseconds: 500));
   }

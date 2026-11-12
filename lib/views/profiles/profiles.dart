@@ -471,7 +471,7 @@ class ProfileItem extends ConsumerWidget {
                   dialogs.showQrCode(
                     title: profile.realLabel,
                     data: profile.url,
-                    message: appLocalizations.shareQrcodeTip,
+                    message: appLocalizations.shareQrcodeTip(appDisplayName),
                   );
                 },
               ),

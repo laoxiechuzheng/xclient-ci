@@ -947,6 +947,7 @@ void main() {
         child: xcFramed(xcApp(_account(_ShotApi()))),
       ),
     );
+    await xcPrime(tester);
     var elapsed = 0;
     for (final ms in [0, 120, 300, 700]) {
       await tester.pump(Duration(milliseconds: ms - elapsed));

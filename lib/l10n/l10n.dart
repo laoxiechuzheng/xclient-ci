@@ -745,23 +745,23 @@ class AppLocalizations {
     );
   }
 
-  /// `Receiving a link from your phone needs the Nearby devices permission, which lets FlClash reach the local network. Turn it on in the app's settings.`
-  String get sendFromPhonePermissionDenied {
+  /// `Receiving a link from your phone needs the Nearby devices permission, which lets {appName} reach the local network. Turn it on in the app's settings.`
+  String sendFromPhonePermissionDenied(Object appName) {
     return Intl.message(
-      'Receiving a link from your phone needs the Nearby devices permission, which lets FlClash reach the local network. Turn it on in the app\'s settings.',
+      'Receiving a link from your phone needs the Nearby devices permission, which lets $appName reach the local network. Turn it on in the app\'s settings.',
       name: 'sendFromPhonePermissionDenied',
       desc: '',
-      args: [],
+      args: [appName],
     );
   }
 
-  /// `Send a link to FlClash`
-  String get sendFromPhonePageTitle {
+  /// `Send a link to {appName}`
+  String sendFromPhonePageTitle(Object appName) {
     return Intl.message(
-      'Send a link to FlClash',
+      'Send a link to $appName',
       name: 'sendFromPhonePageTitle',
       desc: '',
-      args: [],
+      args: [appName],
     );
   }
 
@@ -800,13 +800,13 @@ class AppLocalizations {
     );
   }
 
-  /// `Scan with FlClash on another device to import this profile.`
-  String get shareQrcodeTip {
+  /// `Scan with {appName} on another device to import this profile.`
+  String shareQrcodeTip(Object appName) {
     return Intl.message(
-      'Scan with FlClash on another device to import this profile.',
+      'Scan with $appName on another device to import this profile.',
       name: 'shareQrcodeTip',
       desc: '',
-      args: [],
+      args: [appName],
     );
   }
 
@@ -2461,13 +2461,13 @@ class AppLocalizations {
     return Intl.message('Disclaimer', name: 'disclaimer', desc: '', args: []);
   }
 
-  /// `Before using FlClash ("the Software"), please read this statement carefully and make sure you understand all of it. Tapping "Agree" means you have read, understood, and accept every term below. If you do not agree, tap "Exit" and stop using the Software.`
-  String get disclaimerDesc {
+  /// `Before using {appName} ("the Software"), please read this statement carefully and make sure you understand all of it. Tapping "Agree" means you have read, understood, and accept every term below. If you do not agree, tap "Exit" and stop using the Software.`
+  String disclaimerDesc(Object appName) {
     return Intl.message(
-      'Before using FlClash ("the Software"), please read this statement carefully and make sure you understand all of it. Tapping "Agree" means you have read, understood, and accept every term below. If you do not agree, tap "Exit" and stop using the Software.',
+      'Before using $appName ("the Software"), please read this statement carefully and make sure you understand all of it. Tapping "Agree" means you have read, understood, and accept every term below. If you do not agree, tap "Exit" and stop using the Software.',
       name: 'disclaimerDesc',
       desc: '',
-      args: [],
+      args: [appName],
     );
   }
 
@@ -4841,13 +4841,13 @@ class AppLocalizations {
     );
   }
 
-  /// `Helper service unavailable; TUN mode cannot be enabled. Reinstall FlClash to restore it.`
-  String get helperCorruptTip {
+  /// `Helper service unavailable; TUN mode cannot be enabled. Reinstall {appName} to restore it.`
+  String helperCorruptTip(Object appName) {
     return Intl.message(
-      'Helper service unavailable; TUN mode cannot be enabled. Reinstall FlClash to restore it.',
+      'Helper service unavailable; TUN mode cannot be enabled. Reinstall $appName to restore it.',
       name: 'helperCorruptTip',
       desc: '',
-      args: [],
+      args: [appName],
     );
   }
 
@@ -4871,23 +4871,23 @@ class AppLocalizations {
     );
   }
 
-  /// `Windows refused to run FlClashCore.exe (error {code}). An app control policy such as Smart App Control or AppLocker blocks unsigned programs; allow FlClash in that policy or turn it off, then try again.`
-  String coreBlockedByPolicyTip(Object code) {
+  /// `Windows refused to run {core}.exe (error {code}). An app control policy such as Smart App Control or AppLocker blocks unsigned programs; allow {appName} in that policy or turn it off, then try again.`
+  String coreBlockedByPolicyTip(Object core, Object code, Object appName) {
     return Intl.message(
-      'Windows refused to run FlClashCore.exe (error $code). An app control policy such as Smart App Control or AppLocker blocks unsigned programs; allow FlClash in that policy or turn it off, then try again.',
+      'Windows refused to run $core.exe (error $code). An app control policy such as Smart App Control or AppLocker blocks unsigned programs; allow $appName in that policy or turn it off, then try again.',
       name: 'coreBlockedByPolicyTip',
       desc: '',
-      args: [code],
+      args: [core, code, appName],
     );
   }
 
-  /// `Windows Smart App Control blocked FlClashCore.exe because it is not signed. Open Windows Security → App & browser control → Smart App Control settings, choose Off, then start FlClash again. Smart App Control cannot be turned back on without reinstalling Windows.`
-  String get coreBlockedBySmartAppControlTip {
+  /// `Windows Smart App Control blocked {core}.exe because it is not signed. Open Windows Security → App & browser control → Smart App Control settings, choose Off, then start {appName} again. Smart App Control cannot be turned back on without reinstalling Windows.`
+  String coreBlockedBySmartAppControlTip(Object core, Object appName) {
     return Intl.message(
-      'Windows Smart App Control blocked FlClashCore.exe because it is not signed. Open Windows Security → App & browser control → Smart App Control settings, choose Off, then start FlClash again. Smart App Control cannot be turned back on without reinstalling Windows.',
+      'Windows Smart App Control blocked $core.exe because it is not signed. Open Windows Security → App & browser control → Smart App Control settings, choose Off, then start $appName again. Smart App Control cannot be turned back on without reinstalling Windows.',
       name: 'coreBlockedBySmartAppControlTip',
       desc: '',
-      args: [],
+      args: [core, appName],
     );
   }
 
@@ -6919,13 +6919,13 @@ class AppLocalizations {
     );
   }
 
-  /// `FlClash ran into an error while starting and can't continue. Copy the details to report the problem. If it keeps happening, clearing the data usually lets the app start again.`
-  String get initFailedTip {
+  /// `{appName} ran into an error while starting and can't continue. Copy the details to report the problem. If it keeps happening, clearing the data usually lets the app start again.`
+  String initFailedTip(Object appName) {
     return Intl.message(
-      'FlClash ran into an error while starting and can\'t continue. Copy the details to report the problem. If it keeps happening, clearing the data usually lets the app start again.',
+      '$appName ran into an error while starting and can\'t continue. Copy the details to report the problem. If it keeps happening, clearing the data usually lets the app start again.',
       name: 'initFailedTip',
       desc: '',
-      args: [],
+      args: [appName],
     );
   }
 
@@ -7943,8 +7943,7 @@ class AppLocalizations {
   String customImportDroppedSubRules(num count, Object label) {
     return Intl.plural(
       count,
-      one:
-          '1 SUB-RULE rule was dropped, since custom profiles do not support sub-rules',
+      one: '1 SUB-RULE rule was dropped, since custom profiles do not support sub-rules',
       other:
           '$label SUB-RULE rules were dropped, since custom profiles do not support sub-rules',
       name: 'customImportDroppedSubRules',

@@ -467,6 +467,10 @@ so every platform's outcome is reachable from one host. `getWindowHeaderHeight` 
 `lib/common/layout.dart` own the window header rule for both `WindowHeaderContainer` and `overlayTopOffset` — they must
 agree, or the content is offset by a header that is not there. `WindowHeaderBar` takes its height and slots as arguments,
 which is what lets `test/manager/window_header_test.dart` measure the Windows caption bar on a macOS host.
+`WindowHeaderContainer.fullWindowPage` is the brand's only hook into the header: while that provider reads true the
+bar turns clear and drops its divider, and `WindowHeaderLayout` lays the page out under it with the header height added
+to `MediaQuery.padding.top`, so a page that paints its own backdrop there must keep its content in a `SafeArea`.
+FlClash passes null and keeps the solid bar above the page.
 
 A `Stack` under loose constraints sizes to its non-positioned children, and falls back to `constraints.biggest` only when
 it has none — so a bar that fills the window must keep every slot positioned. One non-positioned child is enough to

@@ -31,7 +31,7 @@ List<TextEdit> serviceTextEdits(BrandConfig brand) {
   return [
     TextEdit(
       'lib/common/constant.dart',
-      'brand app name, helper service and core pipe',
+      'brand app name, helper service, core binary and pipe',
       (content) {
         var result = _replaceSymbol(content, _coreSymbol, core);
         result = _replaceSymbol(result, _helperSymbol, helper);
@@ -44,7 +44,6 @@ List<TextEdit> serviceTextEdits(BrandConfig brand) {
         );
       },
     ),
-    symbols('lib/common/path.dart', hasHelper: false),
     symbols('build_config.yaml'),
     TextEdit('build_config.yaml', 'managed native probe policy', (content) {
       final config = loadYaml(content);

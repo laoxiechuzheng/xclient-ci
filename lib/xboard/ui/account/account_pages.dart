@@ -556,7 +556,7 @@ class XcChangePasswordPage extends StatefulWidget {
 }
 
 class _XcChangePasswordPageState extends State<XcChangePasswordPage> {
-  final _form = GlobalKey<FormState>();
+  final _form = GlobalKey<XcFormState>();
   final _old = TextEditingController();
   final _new = TextEditingController();
   final _confirm = TextEditingController();
@@ -574,7 +574,7 @@ class _XcChangePasswordPageState extends State<XcChangePasswordPage> {
   @override
   Widget build(BuildContext context) => XcPage(
     title: '修改密码',
-    child: Form(
+    child: XcForm(
       key: _form,
       child: xcList([
         XcSection(

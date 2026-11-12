@@ -500,7 +500,10 @@ void main() {
   });
 
   group('WindowHeaderLayout above the app navigator', () {
-    Future<void> pumpLayout(WidgetTester tester) async {
+    Future<void> pumpLayout(
+      WidgetTester tester, {
+      bool overlaid = false,
+    }) async {
       final caption = ValueNotifier(const WindowCaptionState());
       addTearDown(caption.dispose);
       tester.view.physicalSize = const Size(900, 600);
@@ -518,8 +521,11 @@ void main() {
           supportedLocales: AppLocalizations.delegate.supportedLocales,
           builder: (_, child) => WindowHeaderLayout(
             height: _windowsHeaderHeight,
+            overlaid: overlaid,
             header: WindowHeaderBar(
               height: _windowsHeaderHeight,
+              backdropOpacity: overlaid ? 0 : null,
+              divider: !overlaid,
               onDragStart: () {},
               onDoubleTap: () {},
               actions: WindowHeaderActions(
@@ -573,6 +579,33 @@ void main() {
       expect(content.top, _windowsHeaderHeight);
       expect(content.width, 900);
       expect(content.bottom, 600);
+      expect(
+        MediaQuery.paddingOf(tester.element(find.byKey(_contentKey))).top,
+        0,
+      );
+    });
+
+    testWidgets('a full-window page reaches under a clear header', (
+      tester,
+    ) async {
+      await pumpLayout(tester, overlaid: true);
+
+      final content = tester.getRect(find.byKey(_contentKey));
+      expect(content, const Rect.fromLTWH(0, 0, 900, 600));
+      expect(
+        MediaQuery.paddingOf(tester.element(find.byKey(_contentKey))).top,
+        _windowsHeaderHeight,
+      );
+      final bar = find.byType(WindowHeaderBar);
+      final material = tester.widget<Material>(
+        find.descendant(of: bar, matching: find.byType(Material)).first,
+      );
+      expect(material.shape, isNull);
+      final fill = tester.widget<ColoredBox>(
+        find.descendant(of: bar, matching: find.byType(ColoredBox)).first,
+      );
+      expect(fill.color.a, 0);
+      expect(_glyph(CaptionGlyph.close), findsOneWidget);
     });
   });
 
@@ -699,6 +732,7 @@ void main() {
       WidgetTester tester, {
       required int version,
       required Size viewSize,
+      Provider<bool>? fullWindowPage,
     }) async {
       container = ProviderContainer(
         overrides: [
@@ -717,10 +751,14 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const TestApp(
+          child: TestApp(
             includeNavigatorKey: false,
             child: WindowHeaderContainer(
-              child: ColoredBox(key: _contentKey, color: Color(0xFF00FF00)),
+              fullWindowPage: fullWindowPage,
+              child: const ColoredBox(
+                key: _contentKey,
+                color: Color(0xFF00FF00),
+              ),
             ),
           ),
         ),
@@ -765,6 +803,31 @@ void main() {
         tester.getTopLeft(find.byKey(_contentKey)).dy,
         shows ? kHeaderHeight : 0,
       );
+    });
+
+    testWidgets('a full-window page takes the header row as padding', (
+      tester,
+    ) async {
+      final page = Provider<bool>((_) => true);
+      await pumpContainer(
+        tester,
+        version: 15,
+        viewSize: const Size(1200, 800),
+        fullWindowPage: page,
+      );
+
+      final shows = _hostShowsHeader(version: 15, isMobileView: false);
+      expect(tester.getTopLeft(find.byKey(_contentKey)).dy, 0);
+      expect(
+        MediaQuery.paddingOf(tester.element(find.byKey(_contentKey))).top,
+        shows ? kHeaderHeight : 0,
+      );
+      if (shows) {
+        expect(
+          tester.widget<WindowHeader>(find.byType(WindowHeader)).transparent,
+          isTrue,
+        );
+      }
     });
 
     testWidgets('the overlay offset reserves exactly what the header takes', (

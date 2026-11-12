@@ -206,7 +206,14 @@ class _WindowContainerState extends ConsumerState<WindowManager>
 class WindowHeaderContainer extends StatelessWidget {
   final Widget child;
 
-  const WindowHeaderContainer({super.key, required this.child});
+  /// True while the page paints its own backdrop under the header.
+  final Provider<bool>? fullWindowPage;
+
+  const WindowHeaderContainer({
+    super.key,
+    required this.child,
+    this.fullWindowPage,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -223,9 +230,12 @@ class WindowHeaderContainer extends StatelessWidget {
         if (!showsHeader) {
           return child!;
         }
+        final page = fullWindowPage;
+        final overlaid = page != null && ref.watch(page);
         return WindowHeaderLayout(
           height: kHeaderHeight,
-          header: const WindowHeader(),
+          overlaid: overlaid,
+          header: WindowHeader(transparent: overlaid),
           child: child!,
         );
       },
@@ -240,21 +250,40 @@ class WindowHeaderLayout extends StatelessWidget {
     required this.height,
     required this.header,
     required this.child,
+    this.overlaid = false,
   });
 
   final double height;
   final Widget header;
   final Widget child;
 
+  /// Extends [child] under the header, which joins its top padding.
+  final bool overlaid;
+
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final inset = overlaid ? height : 0.0;
     return Overlay.wrap(
       child: Stack(
         children: [
           Column(
             children: [
-              SizedBox(height: height),
-              Expanded(flex: 1, child: child),
+              SizedBox(height: height - inset),
+              Expanded(
+                flex: 1,
+                child: MediaQuery(
+                  data: media.copyWith(
+                    padding: media.padding.copyWith(
+                      top: media.padding.top + inset,
+                    ),
+                    viewPadding: media.viewPadding.copyWith(
+                      top: media.viewPadding.top + inset,
+                    ),
+                  ),
+                  child: child,
+                ),
+              ),
             ],
           ),
           Positioned(top: 0, left: 0, right: 0, child: header),
@@ -381,7 +410,9 @@ class WindowCaptionController extends ValueNotifier<WindowCaptionState>
 }
 
 class WindowHeader extends ConsumerStatefulWidget {
-  const WindowHeader({super.key});
+  const WindowHeader({super.key, this.transparent = false});
+
+  final bool transparent;
 
   @override
   ConsumerState<WindowHeader> createState() => _WindowHeaderState();
@@ -403,10 +434,11 @@ class _WindowHeaderState extends ConsumerState<WindowHeader> {
         : ref.watch(windowBlurProvider);
     return WindowHeaderBar(
       height: kHeaderHeight,
-      backdropOpacity: backdropOpacity,
+      backdropOpacity: widget.transparent ? 0 : backdropOpacity,
+      divider: !widget.transparent,
       onDragStart: desktopWindow.startDragging,
       onDoubleTap: caption.toggleMaximized,
-      title: system.isMacOS ? const Text(appName) : null,
+      title: system.isMacOS ? const Text(appDisplayName) : null,
       actions: system.isMacOS
           ? null
           : WindowHeaderActions(
@@ -431,6 +463,7 @@ class WindowHeaderBar extends StatelessWidget {
     this.backdropOpacity,
     this.title,
     this.actions,
+    this.divider = true,
   });
 
   final double height;
@@ -439,6 +472,7 @@ class WindowHeaderBar extends StatelessWidget {
   final double? backdropOpacity;
   final Widget? title;
   final Widget? actions;
+  final bool divider;
 
   @override
   Widget build(BuildContext context) {
@@ -446,7 +480,7 @@ class WindowHeaderBar extends StatelessWidget {
     final backdropOpacity = this.backdropOpacity;
     return Material(
       color: backdropOpacity != null ? Colors.transparent : null,
-      shape: Border(bottom: Divider.createBorderSide(context)),
+      shape: divider ? Border(bottom: Divider.createBorderSide(context)) : null,
       child: SizedBox(
         height: height,
         child: Stack(

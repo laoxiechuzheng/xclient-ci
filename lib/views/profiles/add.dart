@@ -87,7 +87,9 @@ class AddProfileMenu extends ConsumerWidget {
     if (!(await app?.requestLocalNetworkPermission() ?? true)) {
       final appLocalizations = currentAppLocalizations;
       final res = await dialogs.showMessage(
-        message: TextSpan(text: appLocalizations.sendFromPhonePermissionDenied),
+        message: TextSpan(
+          text: appLocalizations.sendFromPhonePermissionDenied(appDisplayName),
+        ),
         confirmText: appLocalizations.settings,
       );
       if (res == true) {
@@ -184,7 +186,7 @@ class _SendFromPhoneDialogState extends State<_SendFromPhoneDialog> {
   Future<void> _start() async {
     final appLocalizations = currentAppLocalizations;
     final receiver = await LinkReceiver.start((
-      title: appLocalizations.sendFromPhonePageTitle,
+      title: appLocalizations.sendFromPhonePageTitle(appDisplayName),
       hint: appLocalizations.sendFromPhonePageHint,
       send: appLocalizations.send,
       sent: appLocalizations.sendFromPhonePageSent,

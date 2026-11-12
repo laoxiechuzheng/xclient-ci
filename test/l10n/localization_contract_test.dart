@@ -22,6 +22,23 @@ void main() {
     'zh_CN': messages_zh_cn.messages,
   };
 
+  test('no source message hardcodes the upstream app name', () {
+    // Brand builds pass their own name, so it has to arrive as a placeholder.
+    for (final locale in lookups.keys) {
+      final arb =
+          jsonDecode(File('arb/intl_$locale.arb').readAsStringSync())
+              as Map<String, dynamic>;
+      expect(
+        [
+          for (final MapEntry(:key, :value) in arb.entries)
+            if (value is String && value.contains('FlClash')) key,
+        ],
+        isEmpty,
+        reason: '$locale must name the app through {appName}',
+      );
+    }
+  });
+
   test('every generated locale exposes and evaluates every source message', () {
     final arbByLocale = <String, Map<String, dynamic>>{
       for (final locale in lookups.keys)

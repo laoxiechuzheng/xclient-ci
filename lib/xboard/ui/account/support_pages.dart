@@ -313,7 +313,7 @@ class XcNewTicketPage extends StatefulWidget {
 }
 
 class _XcNewTicketPageState extends State<XcNewTicketPage> {
-  final _form = GlobalKey<FormState>();
+  final _form = GlobalKey<XcFormState>();
   final _subject = TextEditingController();
   final _message = TextEditingController();
   int _level = 0;
@@ -327,7 +327,7 @@ class _XcNewTicketPageState extends State<XcNewTicketPage> {
   @override
   Widget build(BuildContext context) => XcPage(
     title: '提交工单',
-    child: Form(
+    child: XcForm(
       key: _form,
       child: xcList([
         const Padding(

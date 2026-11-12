@@ -10,7 +10,6 @@ import '../../../tool/xclient/src/brand_edits.dart';
 
 const servicePaths = [
   'lib/common/constant.dart',
-  'lib/common/path.dart',
   'build_config.yaml',
   'plugins/setup/setup_hooks/lib/src/options.dart',
   'services/helper/build.rs',
@@ -56,7 +55,9 @@ void main() {
       constants,
       contains("const appHelperService = 'XClientexampleHelperService'"),
     );
-    expect(constants, contains(r'pipe\\XClientexampleCore_'));
+    expect(constants, contains("const coreName = 'XClientexampleCore'"));
+    expect(constants, contains("const appName = 'ExampleClient'"));
+    expect(constants, contains(r'pipe\\${coreName}_'));
     expect(constants, contains('const helperPort = 47890'));
     expect(constants, contains(r'Services\\$appHelperService\\Runtime'));
     expect(
@@ -70,10 +71,6 @@ void main() {
     expect(
       read('services/helper/src/service/hub.rs'),
       contains(r'pipe\XClientexampleCore_'),
-    );
-    expect(
-      read('lib/common/path.dart'),
-      contains(r'XClientexampleCore$executableExtension'),
     );
     expect(
       read('build_config.yaml'),

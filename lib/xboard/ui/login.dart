@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/ui/shape.dart';
 import 'package:fl_clash/ui/typography.dart';
@@ -65,21 +67,22 @@ class _XcAuthGateState extends ConsumerState<XcAuthGate> {
       child: ref
           .watch(xcSessionProvider)
           .when(
-            loading: () => const Scaffold(
-              body: Center(
-                child: CommonCircleLoading.page(semanticLabel: '正在加载'),
-              ),
+            loading: () => XcLaunchView(
+              key: XcLaunchView.handoff,
+              displayName: brand.displayName,
             ),
             error: (error, stack) => Scaffold(
-              body: XcStateView(
-                tone: XcTone.danger,
-                glyph: AppGlyphs.error,
-                title: '客户端初始化失败，请重试',
-                message: '可能是网络暂时不可用，重试通常即可恢复。',
-                action: XcButton(
-                  label: '重试',
-                  glyph: AppGlyphs.refresh,
-                  onPressed: () => ref.invalidate(xcRuntimeProvider),
+              body: SafeArea(
+                child: XcStateView(
+                  tone: XcTone.danger,
+                  glyph: AppGlyphs.error,
+                  title: '客户端初始化失败，请重试',
+                  message: '可能是网络暂时不可用，重试通常即可恢复。',
+                  action: XcButton(
+                    label: '重试',
+                    glyph: AppGlyphs.refresh,
+                    onPressed: () => ref.invalidate(xcRuntimeProvider),
+                  ),
                 ),
               ),
             ),
@@ -128,7 +131,7 @@ class XcLoginPage extends StatefulWidget {
 }
 
 class _XcLoginPageState extends State<XcLoginPage> {
-  final _form = GlobalKey<FormState>();
+  final _form = GlobalKey<XcFormState>();
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
@@ -173,7 +176,7 @@ class _XcLoginPageState extends State<XcLoginPage> {
       shape: XcRadius.hero,
       padding: const EdgeInsets.all(XcSpace.xl),
       child: XcFieldTheme(
-        child: Form(
+        child: XcForm(
           key: _form,
           child: AutofillGroup(
             child: Column(
@@ -291,101 +294,243 @@ class _XcLoginPageState extends State<XcLoginPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: XcColors.of(context).page,
-    body: LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 900;
-        final gutter = XcSpace.gutterOf(constraints.maxWidth);
-        final form = Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget build(BuildContext context) => _AuthScaffold(
+    displayName: widget.displayName,
+    builder: (context, wide, gutter) {
+      final form = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!wide) ...[
+            XcEntrance(
+              child: Row(
+                spacing: XcSpace.sm,
+                children: [
+                  XcBrandMark(title: widget.displayName, size: 44),
+                  Expanded(
+                    child: Text(
+                      widget.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: XcType.headline(context),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: XcSpace.xxl),
+          ],
+          XcEntrance(
+            index: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              spacing: XcSpace.xs,
+              children: [
+                Text(
+                  '欢迎回来',
+                  style: AppTextStyle.largeTitle
+                      .of(context, emphasized: true)
+                      .copyWith(color: XcColors.of(context).title),
+                ),
+                Text('登录后一键连接，节点会自动加密同步。', style: XcType.secondary(context)),
+              ],
+            ),
+          ),
+          const SizedBox(height: XcSpace.xl),
+          XcEntrance(index: 2, child: _formCard(context)),
+          const SizedBox(height: XcSpace.lg),
+          const XcEntrance(index: 3, child: _TrustLine()),
+          if (widget.footer case final footer?) ...[
+            const SizedBox(height: XcSpace.md),
+            Center(child: footer),
+          ],
+        ],
+      );
+      return SingleChildScrollView(
+        padding: EdgeInsets.symmetric(horizontal: gutter, vertical: XcSpace.xl),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: XcSpace.formWidth + 20),
+            child: form,
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// The sign-in backdrop around [builder]'s column: a brand panel beside it
+/// from 900 dp, the aurora alone below that.
+class _AuthScaffold extends StatefulWidget {
+  const _AuthScaffold({
+    required this.displayName,
+    required this.builder,
+    this.showcase = true,
+  });
+  final String displayName;
+  final Widget Function(BuildContext context, bool wide, double gutter) builder;
+  final bool showcase;
+  @override
+  State<_AuthScaffold> createState() => _AuthScaffoldState();
+}
+
+class _AuthScaffoldState extends State<_AuthScaffold> {
+  bool? _wide;
+  bool _settled = false;
+  @override
+  Widget build(BuildContext context) => XcStandardDensity(
+    child: Scaffold(
+      backgroundColor: XcColors.of(context).page,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 900;
+          _settled |= _wide != null && _wide != wide;
+          _wide = wide;
+          final content = SafeArea(
+            child: Center(
+              child: widget.builder(
+                context,
+                wide,
+                XcSpace.gutterOf(constraints.maxWidth),
+              ),
+            ),
+          );
+          return XcEntranceSettled(
+            settled: _settled,
+            child: wide
+                ? Row(
+                    children: [
+                      Expanded(
+                        flex: 5,
+                        child: _BrandPanel(
+                          displayName: widget.displayName,
+                          showcase: widget.showcase,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 6,
+                        child: Stack(
+                          children: [
+                            const Positioned.fill(child: _Aurora(subtle: true)),
+                            content,
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : Stack(
+                    children: [
+                      const Positioned.fill(child: _Aurora()),
+                      content,
+                    ],
+                  ),
+          );
+        },
+      ),
+    ),
+  );
+}
+
+/// Shown while the client starts and checks the session, on the sign-in
+/// backdrop, so the form arrives without the background changing.
+class XcLaunchView extends StatefulWidget {
+  const XcLaunchView({super.key, required this.displayName});
+  final String displayName;
+
+  /// Startup and the session check each show a launch view; one key keeps a
+  /// single state, with its clock and motion, across the handover.
+  static final handoff = GlobalKey(debugLabel: 'xc-launch');
+
+  static const slowAfter = Duration(seconds: 4);
+
+  @override
+  State<XcLaunchView> createState() => _XcLaunchViewState();
+}
+
+class _XcLaunchViewState extends State<XcLaunchView> {
+  Timer? _slowTimer;
+  bool _slow = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _slowTimer = Timer(XcLaunchView.slowAfter, () {
+      if (mounted) setState(() => _slow = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _slowTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _AuthScaffold(
+    displayName: widget.displayName,
+    showcase: false,
+    builder: (context, wide, gutter) {
+      final colors = XcColors.of(context);
+      final status = _slow ? '网络较慢，仍在尝试…' : '正在准备安全连接…';
+      return Padding(
+        padding: EdgeInsets.symmetric(horizontal: gutter),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             if (!wide) ...[
               XcEntrance(
-                child: Row(
-                  spacing: XcSpace.sm,
-                  children: [
-                    XcBrandMark(title: widget.displayName, size: 44),
-                    Expanded(
-                      child: Text(
-                        widget.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: XcType.headline(context),
-                      ),
-                    ),
-                  ],
+                child: XcBrandMark(title: widget.displayName, size: 64),
+              ),
+              const SizedBox(height: XcSpace.lg),
+              XcEntrance(
+                child: Text(
+                  widget.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: XcType.headline(context),
                 ),
               ),
               const SizedBox(height: XcSpace.xxl),
             ],
             XcEntrance(
               index: 1,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                spacing: XcSpace.xs,
-                children: [
-                  Text(
-                    '欢迎回来',
-                    style: AppTextStyle.largeTitle
-                        .of(context, emphasized: true)
-                        .copyWith(color: XcColors.of(context).title),
+              child: Semantics(
+                liveRegion: true,
+                label: status,
+                excludeSemantics: true,
+                child: XcSwap(
+                  value: _slow,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    spacing: XcSpace.xs,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        spacing: XcSpace.sm,
+                        children: [
+                          CommonCircleLoading(size: 18, color: colors.accent),
+                          Flexible(
+                            child: Text(
+                              status,
+                              style: XcType.secondary(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_slow)
+                        Text(
+                          '无需操作，准备好后会自动继续。',
+                          textAlign: TextAlign.center,
+                          style: XcType.caption(context),
+                        ),
+                    ],
                   ),
-                  Text('登录后一键连接，节点会自动加密同步。', style: XcType.secondary(context)),
-                ],
-              ),
-            ),
-            const SizedBox(height: XcSpace.xl),
-            XcEntrance(index: 2, child: _formCard(context)),
-            const SizedBox(height: XcSpace.lg),
-            const XcEntrance(index: 3, child: _TrustLine()),
-            if (widget.footer case final footer?) ...[
-              const SizedBox(height: XcSpace.md),
-              Center(child: footer),
-            ],
-          ],
-        );
-        final scroll = SingleChildScrollView(
-          padding: EdgeInsets.symmetric(
-            horizontal: gutter,
-            vertical: XcSpace.xl,
-          ),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: XcSpace.formWidth + 20,
-              ),
-              child: form,
-            ),
-          ),
-        );
-        if (!wide) {
-          return Stack(
-            children: [
-              const Positioned.fill(child: _Aurora()),
-              SafeArea(child: Center(child: scroll)),
-            ],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(
-              flex: 5,
-              child: _BrandPanel(displayName: widget.displayName),
-            ),
-            Expanded(
-              flex: 6,
-              child: Stack(
-                children: [
-                  const Positioned.fill(child: _Aurora(subtle: true)),
-                  SafeArea(child: Center(child: scroll)),
-                ],
+                ),
               ),
             ),
           ],
-        );
-      },
-    ),
+        ),
+      );
+    },
   );
 }
 
@@ -468,8 +613,9 @@ class _TrustLine extends StatelessWidget {
 }
 
 class _BrandPanel extends StatelessWidget {
-  const _BrandPanel({required this.displayName});
+  const _BrandPanel({required this.displayName, required this.showcase});
   final String displayName;
+  final bool showcase;
   static const _features = [
     (AppGlyphs.bolt, '一键连接', '登录后点一下，即可开启加密连接'),
     (AppGlyphs.cloudSync, '节点自动同步', '线路加密下发，无需手动导入或配置'),
@@ -534,69 +680,71 @@ class _BrandPanel extends StatelessWidget {
                     ],
                   ),
                   const Spacer(),
-                  XcEntrance(
-                    child: Text(
-                      '一键连接，\n安心畅游网络',
-                      style: AppTextStyle.display
-                          .of(context, emphasized: true)
-                          .copyWith(color: onBrand, height: 1.2),
-                    ),
-                  ),
-                  const SizedBox(height: XcSpace.xxl),
-                  for (final (index, (glyph, title, caption))
-                      in _features.indexed)
+                  if (showcase) ...[
                     XcEntrance(
-                      index: index + 1,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: XcSpace.lg),
-                        child: Row(
-                          spacing: XcSpace.md,
-                          children: [
-                            DecoratedBox(
-                              decoration: ShapeDecoration(
-                                color: onBrand.withValues(alpha: 0.16),
-                                shape: AppShape.circle,
-                              ),
-                              child: SizedBox.square(
-                                dimension: 44,
-                                child: Center(
-                                  child: GlyphIcon(
-                                    glyph,
-                                    size: 22,
-                                    color: onBrand,
-                                    fill: 1,
+                      child: Text(
+                        '一键连接，\n安心畅游网络',
+                        style: AppTextStyle.display
+                            .of(context, emphasized: true)
+                            .copyWith(color: onBrand, height: 1.2),
+                      ),
+                    ),
+                    const SizedBox(height: XcSpace.xxl),
+                    for (final (index, (glyph, title, caption))
+                        in _features.indexed)
+                      XcEntrance(
+                        index: index + 1,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: XcSpace.lg),
+                          child: Row(
+                            spacing: XcSpace.md,
+                            children: [
+                              DecoratedBox(
+                                decoration: ShapeDecoration(
+                                  color: onBrand.withValues(alpha: 0.16),
+                                  shape: AppShape.circle,
+                                ),
+                                child: SizedBox.square(
+                                  dimension: 44,
+                                  child: Center(
+                                    child: GlyphIcon(
+                                      glyph,
+                                      size: 22,
+                                      color: onBrand,
+                                      fill: 1,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                spacing: 2,
-                                children: [
-                                  Text(
-                                    title,
-                                    style: AppTextStyle.headline
-                                        .of(context)
-                                        .copyWith(color: onBrand),
-                                  ),
-                                  Text(
-                                    caption,
-                                    style: AppTextStyle.subheadline
-                                        .of(context)
-                                        .copyWith(
-                                          color: onBrand.withValues(
-                                            alpha: 0.82,
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  spacing: 2,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: AppTextStyle.headline
+                                          .of(context)
+                                          .copyWith(color: onBrand),
+                                    ),
+                                    Text(
+                                      caption,
+                                      style: AppTextStyle.subheadline
+                                          .of(context)
+                                          .copyWith(
+                                            color: onBrand.withValues(
+                                              alpha: 0.82,
+                                            ),
                                           ),
-                                        ),
-                                  ),
-                                ],
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
+                  ],
                   const Spacer(),
                 ],
               ),
@@ -615,11 +763,14 @@ class _Aurora extends StatelessWidget {
   final bool onBrand;
   @override
   Widget build(BuildContext context) => IgnorePointer(
-    child: CustomPaint(
-      painter: _AuroraPainter(
-        colors: XcColors.of(context),
-        strength: subtle ? 0.55 : 1,
-        onBrand: onBrand,
+    child: RepaintBoundary(
+      child: CustomPaint(
+        isComplex: true,
+        painter: _AuroraPainter(
+          colors: XcColors.of(context),
+          strength: subtle ? 0.55 : 1,
+          onBrand: onBrand,
+        ),
       ),
     ),
   );
@@ -639,7 +790,7 @@ class _AuroraPainter extends CustomPainter {
     void glow(Offset center, double radius, Color color, double alpha) {
       final rect = Rect.fromCircle(center: center, radius: radius);
       canvas.drawRect(
-        Offset.zero & size,
+        rect.intersect(Offset.zero & size),
         Paint()
           ..shader = RadialGradient(
             colors: [

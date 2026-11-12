@@ -1,7 +1,29 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:animations/animations.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'tokens.dart';
+
+/// Entrances below it start at rest: the content was introduced already.
+class XcEntranceSettled extends InheritedWidget {
+  const XcEntranceSettled({
+    super.key,
+    required this.settled,
+    required super.child,
+  });
+
+  final bool settled;
+
+  static bool of(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<XcEntranceSettled>()?.settled ??
+      false;
+
+  @override
+  bool updateShouldNotify(XcEntranceSettled oldWidget) => false;
+}
 
 /// Fades and lifts [child] in once, [index] steps after its siblings. One
 /// controller covers the delay as well, so no timer outlives the widget.
@@ -41,15 +63,29 @@ class _XcEntranceState extends State<XcEntrance>
 
   int get _steps => widget.index.clamp(0, 8);
 
+  static const _primeOpacity = 1 / 255;
+  bool _scheduled = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_controller.isAnimating || _controller.isCompleted) return;
-    if (XcMotion.reduced(context)) {
-      _controller.value = 1;
-    } else {
-      _controller.forward();
+    if (_scheduled || _controller.isAnimating || _controller.isCompleted) {
+      return;
     }
+    if (XcMotion.reduced(context) || XcEntranceSettled.of(context)) {
+      _controller.value = 1;
+      return;
+    }
+    _scheduled = true;
+    unawaited(_startAfterFirstRaster());
+  }
+
+  // Raster runs one frame behind; see DESIGN-SYSTEM.md, motion rule 1.
+  Future<void> _startAfterFirstRaster() async {
+    final scheduler = SchedulerBinding.instance;
+    await scheduler.endOfFrame;
+    await scheduler.endOfFrame;
+    if (mounted && !_controller.isCompleted) unawaited(_controller.forward());
   }
 
   @override
@@ -62,7 +98,7 @@ class _XcEntranceState extends State<XcEntrance>
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: _progress,
     builder: (context, child) => Opacity(
-      opacity: _progress.value,
+      opacity: math.max(_progress.value, _primeOpacity),
       child: Transform.translate(
         offset: Offset(0, widget.offset * (1 - _progress.value)),
         child: child,

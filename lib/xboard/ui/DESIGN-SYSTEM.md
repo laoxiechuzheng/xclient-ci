@@ -40,7 +40,7 @@
 
 | 组件 | 用途 | 要点 |
 |---|---|---|
-| `XcButton` | 主 / 次 / 文字 / 危险按钮，大 54、中 46、小 38 dp 高 | 主按钮渐变 + 柔光；`loading` 时禁用并显示转圈和 `loadingLabel`；按压轻微膨胀（`ElasticPress`） |
+| `XcButton` | 主 / 次 / 文字 / 危险按钮，大 54、中 46、小 38 dp 高（主按钮至少 44） | 主按钮渐变 + 柔光；`loading` 时禁用并显示转圈和 `loadingLabel`；按压轻微膨胀（`ElasticPress`）；固定标准密度，三端同高 |
 | `XcTaskButton` | 执行异步任务的按钮（`widgets.dart`） | 自动 loading，失败走 `xcMessage` |
 | `XcPanel` | 卡片 / 面板 | `elevated` 浮起一层；`onTap` 时整卡可点 |
 | `XcBadge` | 状态徽章 | 圆点或图标 + 文字，颜色来自 tone |
@@ -53,7 +53,9 @@
 | `XcSectionHeader` | 分组标题 | 可带右侧操作 |
 | `XcBottomActionBar` | 底部固定操作栏 | 摘要 + 按钮；手机结账页的合计与“创建订单”固定在底部，宽屏改为右侧摘要卡 |
 | `XcBannerSlot` | 页顶横幅容器 | 统一页边距和最大宽度 |
-| `XcFieldTheme` | 表单输入框主题 | 填充式、无边框，聚焦 2 dp 主色描边；`floating: true` 让标签浮到框上方，用于多字段表单 |
+| `XcFieldTheme` | 表单输入框主题 | 填充式、无边框，聚焦 2 dp 主色描边；`floating: true` 让标签浮到框上方，用于多字段表单；子树固定标准密度（输入框 57 dp） |
+| `XcForm` | 带校验的表单 | 第一次提交（`XcFormState.validate()`）才显示错误，之后每次修改即时重验：改对的字段立刻去掉提示和红描边；不改输入时提示一直保留（安卓 QA 依赖空表提交后“请输入邮箱 / 请输入密码”可见）。登录、修改密码、提交工单都用它 |
+| `XcStandardDensity` | 固定 Material 标准密度 | Windows / macOS 的 Material 默认 `VisualDensity.compact`，按钮、输入框都会矮 8 dp；品牌页骨架（`XcPage`、登录、启动页）和 `XcFieldTheme` 在子树里固定为标准密度。不改全局主题，上游 FlClash 页面不受影响 |
 | `XcConnectionOrb` | 首页连接按钮 | 未连接 / 连接中 / 已连接 / 断开中 / 受限五态，见下方动效 |
 | `XcBottomNav` / `XcSideNav` | 手机悬浮底栏 / 桌面侧栏 | 选中项用中性色滑块指示，不用大块主色 |
 
@@ -72,11 +74,18 @@
 
 `lib/xboard/ui/nodes_view.dart`：地区徽记（地区缩写）+ 节点名 + 延迟徽章 + 选中态，按地区分组。延迟只读缓存结果并经 `display_delay.dart` 映射；超时显示红色“超时”，没有缓存时显示中性“未测速”，不触发测速。上游 `lib/views/proxies/common.dart` 的 `ProxiesViewOverride` 是注入点：只有品牌模式在树上放了它，非品牌 FlClash 的节点页完全不变。
 
+### 启动与登录（`login.dart`）
+
+- `XcLaunchView`：客户端启动（`initProvider` 未就绪）和会话检查（`xcSessionProvider` 加载中）期间显示。画的是登录页同一套背景（窄屏极光；900 dp 起左侧品牌面板 + 右侧淡极光，面板只有品牌标识，标语和卖点等登录页再入场），中间是品牌标识、名称和“正在准备安全连接…”；4 秒后换成“网络较慢，仍在尝试…”和“无需操作，准备好后会自动继续。”。两个阶段共用 `XcLaunchView.handoff` 这个 GlobalKey，状态（计时、动效）在交接时保留。只换呈现，bootstrap、鉴权流程和超时不变。
+- 登录页与启动页共用 `_AuthScaffold`：它记录上一次的宽窄布局，跨 900 dp 切换后用 `XcEntranceSettled` 让新布局直接显示终态，不重播入场。
+- 极光背景（`_Aurora`）三层两色径向渐变：每层只填它的圆所覆盖的矩形（圆外本来就是透明，像素不变），外面包 `RepaintBoundary` 并标 `isComplex`，入场动画期间不重绘、可被光栅缓存。没有合并成一层：三层共用同一个渐变着色器程序，首帧卡顿来自着色器编译而不是填充量，合并只会改变观感。
+- 整窗页面与桌面标题栏：品牌显示启动、登录、启动失败或退出这类整窗页面（不是外壳）时，`xcFullWindowPageProvider` 为真。`application.dart` 把它交给上游 `WindowHeaderContainer.fullWindowPage`，标题栏随之变透明、去掉分隔线，页面延伸到标题栏下面，标题栏高度加进页面的 `MediaQuery.padding.top`。这些页面都用 `SafeArea`，内容不会被标题栏压住；标题栏按钮在窗口右侧，下面是页面底色和极光，沿用 `onSurface` 前景色即可保持对比度。非品牌 FlClash 不传这个 provider，行为不变。
+
 `XcLoad`（`widgets.dart`）统一了"加载中 → `CommonCircleLoading`、失败 → `XcStateView` + 重试、无数据 → 空态 + 刷新"。
 
 ## 动效规则
 
-1. **入场**：`XcEntrance(index)` 淡入并上移 14 dp，同组按 70 ms 错峰，最多错 8 级；只播一次。
+1. **入场**：`XcEntrance(index)` 淡入并上移 14 dp，同组按 70 ms 错峰，最多错 8 级；只播一次。第一帧以最低可见透明度（1/255）把内容画出来，让着色器在看不见的时候编译完；动画在第二帧结束后才启动：引擎光栅最多比框架慢一帧，此时第一帧的慢光栅已经做完，不会吃掉动画时间（Windows 原生实测入场时有两帧 76–115 ms 的首次着色器编译）。放在 `XcEntranceSettled(settled: true)` 下的入场直接显示终态，用于布局重建（跨断点）。
 2. **页面切换**：`XcPageSwitcher` 用 fade-through（旧页先淡出，新页再升起），两套布局不会重叠；页标题跟随页面一起切换。
 3. **文字 / 小部件替换**：`XcSwap`，旧内容先退场、新内容再进场，避免叠字。
 4. **数值**：`XcAnimatedNumber` 从旧值滚动到新值，900 ms。
@@ -92,4 +101,4 @@
 - 金额用 `context.xcMoney`（分 → 面板配置的货币）；延迟只用 `lib/xboard/probe/display_delay.dart`。
 - 页面只换呈现，不改业务：API、provider、连接闸门、更新、生命周期逻辑不在设计系统范围内。
 - 手机悬浮底栏下面的内容会滑到底栏后面（`Scaffold.extendBody`）；滚动列表一律用 `xcList` 或自行加 `context.bottomInset` 底部留白，保证最后一项能滚出底栏。
-- 截图回归：`test/xboard/ui/visual_test.dart`（登录、首页、节点）与 `visual_phase2_test.dart`（商店、订单、账户、工单、礼品卡、邀请、更新、启动 / 退出），设置环境变量 `XC_UI_SCREENSHOTS=<目录>` 后运行会输出各尺寸 × 浅/深色 × 各状态截图；不设置时只做渲染断言。共享的尺寸、主题、字体与首页 harness 在 `visual_support.dart`。
+- 截图回归：`test/xboard/ui/visual_test.dart`（登录、启动页、标题栏、首页、节点）与 `visual_phase2_test.dart`（商店、订单、账户、工单、礼品卡、邀请、更新、启动 / 退出），设置环境变量 `XC_UI_SCREENSHOTS=<目录>` 后运行会输出各尺寸 × 浅/深色 × 各状态截图；不设置时只做渲染断言。共享的尺寸、主题、字体与首页 harness 在 `visual_support.dart`。desktop / wide 两种尺寸按 Windows 平台渲染（`debugDefaultTargetPlatformOverride`，`xcVisual` 结束时复位），桌面 Material 的紧凑密度、滚动条等差异会出现在截图里；`login_launch_test.dart` 另外在 Android / Windows / macOS 三个平台上断言按钮和输入框高度一致。`xcSettle` 开头先跑两帧（`xcPrime`），让入场越过首帧等待。

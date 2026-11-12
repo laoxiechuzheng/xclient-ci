@@ -1,6 +1,7 @@
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/l10n/l10n.dart';
+import 'package:fl_clash/manager/window_manager.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/providers/config.dart';
@@ -9,6 +10,7 @@ import 'package:fl_clash/providers/state.dart';
 import 'package:fl_clash/state.dart';
 import 'package:fl_clash/xboard/core/net/api_exception.dart';
 import 'package:fl_clash/xboard/core/sync/subscription_sync.dart';
+import 'package:fl_clash/xboard/ui/common/motion.dart';
 import 'package:fl_clash/xboard/ui/login.dart';
 import 'package:fl_clash/xboard/ui/nodes_view.dart';
 import 'package:fl_clash/xboard/ui/restriction_notice.dart';
@@ -70,6 +72,10 @@ void main() {
           find.byKey(const Key('xc-login-email')),
           'lin.demo@example.invalid',
         );
+        await xcSettle(tester);
+        expect(find.text('请输入邮箱'), findsNothing);
+        expect(find.text('请输入密码'), findsOneWidget);
+        await xcShot(tester, '${size.name}-$theme-login-corrected', size);
         await tester.enterText(
           find.byKey(const Key('xc-login-password')),
           'password123',
@@ -87,6 +93,72 @@ void main() {
         await xcShot(tester, '${size.name}-$theme-login-error', size);
         fail = false;
       });
+
+      xcVisual('launch states render at ${size.name} $theme', (tester) async {
+        xcView(tester, size);
+        await tester.pumpWidget(
+          xcFramed(
+            xcApp(
+              brightness: brightness,
+              const XcLaunchView(displayName: 'Example 加速器'),
+            ),
+          ),
+        );
+        await xcSettle(tester);
+        expect(find.text('正在准备安全连接…'), findsOneWidget);
+        await xcShot(tester, '${size.name}-$theme-launch', size);
+        await tester.pump(XcLaunchView.slowAfter);
+        await xcSettle(tester);
+        expect(find.text('网络较慢，仍在尝试…'), findsOneWidget);
+        await xcShot(tester, '${size.name}-$theme-launch-slow', size);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+
+      if (size.platform != null) {
+        xcVisual('the title bar lets the sign-in backdrop through at '
+            '${size.name} $theme', (tester) async {
+          xcView(tester, size);
+          final caption = ValueNotifier(const WindowCaptionState());
+          addTearDown(caption.dispose);
+          for (final (name, overlaid, page) in [
+            ('login-titlebar-opaque', false, _titlebarLogin),
+            ('login-titlebar', true, _titlebarLogin),
+            ('launch-titlebar', true, _titlebarLaunch),
+          ]) {
+            await tester.pumpWidget(
+              xcFramed(
+                xcApp(
+                  key: ValueKey(name),
+                  brightness: brightness,
+                  localized: true,
+                  WindowHeaderLayout(
+                    height: 32,
+                    overlaid: overlaid,
+                    header: WindowHeaderBar(
+                      height: 32,
+                      backdropOpacity: overlaid ? 0 : null,
+                      divider: !overlaid,
+                      onDragStart: () {},
+                      onDoubleTap: () {},
+                      actions: WindowHeaderActions(
+                        state: caption,
+                        onPin: () {},
+                        onMinimize: () {},
+                        onMaximize: () {},
+                        onClose: () {},
+                      ),
+                    ),
+                    child: page(),
+                  ),
+                ),
+              ),
+            );
+            await xcSettle(tester);
+            await xcShot(tester, '${size.name}-$theme-$name', size);
+          }
+          await tester.pumpWidget(const SizedBox.shrink());
+        });
+      }
 
       final states = <String, Widget Function()>{
         'off': () => XcHomeHarness(data: xcHomeData()),
@@ -315,6 +387,7 @@ void main() {
   xcVisual('home entrance staggers in and settles', (tester) async {
     xcView(tester, XcShotSize.phone);
     await tester.pumpWidget(xcFramed(xcApp(XcHomeHarness(data: xcHomeData()))));
+    await xcPrime(tester);
     var elapsed = 0;
     for (final ms in [0, 120, 300, 700]) {
       await tester.pump(Duration(milliseconds: ms - elapsed));
@@ -323,6 +396,36 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(tester.hasRunningAnimations, isFalse);
+  });
+
+  xcVisual('the sign-in page crosses 900 dp at rest', (tester) async {
+    xcView(tester, XcShotSize.desktop);
+    tester.view.physicalSize = const Size(890, 760);
+    await tester.pumpWidget(
+      xcFramed(
+        xcApp(
+          XcLoginPage(
+            displayName: 'Example 加速器',
+            panelWebUrl: Uri.parse('https://example.invalid'),
+            onLogin: (_, _) async {},
+          ),
+        ),
+      ),
+    );
+    await xcSettle(tester);
+    await xcShot(tester, 'breakpoint-890-before', XcShotSize.desktop);
+    for (final width in [910, 890]) {
+      tester.view.physicalSize = Size(width.toDouble(), 760);
+      await tester.pump();
+      final entrances = tester.widgetList<Opacity>(
+        find.descendant(
+          of: find.byType(XcEntrance),
+          matching: find.byType(Opacity),
+        ),
+      );
+      expect(entrances.map((e) => e.opacity), everyElement(1));
+      await xcShot(tester, 'breakpoint-$width-switched', XcShotSize.desktop);
+    }
   });
 
   xcVisual('page switch fades through and settles', (tester) async {
@@ -414,3 +517,11 @@ ProviderContainer _nodesContainer(Size size) {
   ]);
   return container;
 }
+
+Widget _titlebarLogin() => XcLoginPage(
+  displayName: 'Example 加速器',
+  panelWebUrl: Uri.parse('https://example.invalid'),
+  onLogin: (_, _) async {},
+);
+
+Widget _titlebarLaunch() => const XcLaunchView(displayName: 'Example 加速器');

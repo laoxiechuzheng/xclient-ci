@@ -16,6 +16,18 @@ import 'ui/login.dart';
 import 'ui/shell.dart';
 import 'update/update_widgets.dart';
 
+/// A brand page fills the window instead of the shell, under the header too.
+final xcFullWindowPageProvider = Provider<bool>((ref) {
+  if (ref.watch(xcClosingProvider) || !ref.watch(initProvider)) return true;
+  return ref
+      .watch(xcSessionProvider)
+      .when(
+        loading: () => true,
+        error: (_, _) => true,
+        data: (session) => !session.isLoggedIn,
+      );
+});
+
 class XcAppHost extends ConsumerWidget {
   const XcAppHost({super.key, this.startupFailed = false, this.onRetry});
 
@@ -29,17 +41,19 @@ class XcAppHost extends ConsumerWidget {
       return PopScope(
         canPop: false,
         child: Scaffold(
-          body: XcClosingPanel(
-            onRetry: canRetry
-                ? () {
-                    unawaited(
-                      ref
-                          .read(systemActionProvider.notifier)
-                          .handleExit()
-                          .catchError((Object _) {}),
-                    );
-                  }
-                : null,
+          body: SafeArea(
+            child: XcClosingPanel(
+              onRetry: canRetry
+                  ? () {
+                      unawaited(
+                        ref
+                            .read(systemActionProvider.notifier)
+                            .handleExit()
+                            .catchError((Object _) {}),
+                      );
+                    }
+                  : null,
+            ),
           ),
         ),
       );
@@ -48,22 +62,27 @@ class XcAppHost extends ConsumerWidget {
       if (startupFailed) {
         return XcRootBackScope(
           child: Scaffold(
-            body: XcStateView(
-              glyph: AppGlyphs.warning,
-              tone: XcTone.warning,
-              title: '客户端初始化未完成',
-              message: '若系统中仍有本客户端的 VPN 连接，请先在系统设置中停止，再重试。',
-              action: XcButton(
-                label: '重新初始化',
-                glyph: AppGlyphs.refresh,
-                onPressed: onRetry,
+            body: SafeArea(
+              child: XcStateView(
+                glyph: AppGlyphs.warning,
+                tone: XcTone.warning,
+                title: '客户端初始化未完成',
+                message: '若系统中仍有本客户端的 VPN 连接，请先在系统设置中停止，再重试。',
+                action: XcButton(
+                  label: '重新初始化',
+                  glyph: AppGlyphs.refresh,
+                  onPressed: onRetry,
+                ),
               ),
             ),
           ),
         );
       }
-      return const XcRootBackScope(
-        child: Scaffold(body: Center(child: CommonCircleLoading())),
+      return XcRootBackScope(
+        child: XcLaunchView(
+          key: XcLaunchView.handoff,
+          displayName: ref.watch(xcBrandConfigProvider).displayName,
+        ),
       );
     }
     ref.watch(xcLifecycleBindingProvider);
@@ -160,6 +179,9 @@ class XcPolicyAdmissionBanner extends StatelessWidget {
               ),
               TextButton(
                 onPressed: phase == PolicyCheckPhase.checking ? null : onRetry,
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.standard,
+                ),
                 child: const Text('重试版本核验'),
               ),
             ],

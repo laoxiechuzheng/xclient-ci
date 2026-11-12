@@ -85,8 +85,15 @@ String? coreLaunchBlockedMessage(
   }
   return switch (smartAppControlStateReader()) {
     SmartAppControlState.on || SmartAppControlState.evaluation =>
-      appLocalizations.coreBlockedBySmartAppControlTip,
-    _ => appLocalizations.coreBlockedByPolicyTip(launchOsError(error)!),
+      appLocalizations.coreBlockedBySmartAppControlTip(
+        coreName,
+        appDisplayName,
+      ),
+    _ => appLocalizations.coreBlockedByPolicyTip(
+      coreName,
+      launchOsError(error)!,
+      appDisplayName,
+    ),
   };
 }
 

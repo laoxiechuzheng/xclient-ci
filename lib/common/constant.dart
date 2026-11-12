@@ -9,14 +9,23 @@ import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:material_ui/material_ui.dart';
 
+/// ASCII identity for files, the autostart entry and the TUN device; a brand
+/// build rewrites it to its `windows_app_name`.
 const appName = 'FlClash';
+
+/// The name people read; a brand build defines its `display_name`.
+const appDisplayName = String.fromEnvironment(
+  'XC_DISPLAY_NAME',
+  defaultValue: appName,
+);
 const appHelperService = 'FlClashHelperService';
+const coreName = 'FlClashCore';
 const coreManifestName = 'manifest.json';
 const browserUa =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const packageName = 'com.follow.clash';
 final unixSocketPath = '/tmp/FlClashSocket_${Random().nextInt(10000)}.sock';
-final windowsPipeName = '\\\\.\\pipe\\FlClashCore_${_randomPipeId()}';
+final windowsPipeName = '\\\\.\\pipe\\${coreName}_${_randomPipeId()}';
 const helperPort = 47890;
 const helperPortKey =
     'SYSTEM\\CurrentControlSet\\Services\\$appHelperService\\Runtime';

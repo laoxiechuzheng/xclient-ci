@@ -73,24 +73,26 @@ class XcPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = XcColors.of(context);
-    return Scaffold(
-      backgroundColor: colors.page,
-      appBar: AppBar(
+    return XcStandardDensity(
+      child: Scaffold(
         backgroundColor: colors.page,
-        surfaceTintColor: Colors.transparent,
-        scrolledUnderElevation: 0,
-        titleSpacing: XcSpace.xs,
-        title: Text(title, style: XcType.title(context)),
-        actions: actions,
-      ),
-      bottomNavigationBar: bottom,
-      body: SafeArea(
-        top: false,
-        bottom: bottom == null,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: XcSpace.readingWidth),
-            child: child,
+        appBar: AppBar(
+          backgroundColor: colors.page,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
+          titleSpacing: XcSpace.xs,
+          title: Text(title, style: XcType.title(context)),
+          actions: actions,
+        ),
+        bottomNavigationBar: bottom,
+        body: SafeArea(
+          top: false,
+          bottom: bottom == null,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: XcSpace.readingWidth),
+              child: child,
+            ),
           ),
         ),
       ),

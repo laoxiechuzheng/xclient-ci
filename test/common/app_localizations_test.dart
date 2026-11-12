@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:fl_clash/common/app_localizations.dart';
+import 'package:fl_clash/common/constant.dart';
 import 'package:fl_clash/common/network_error.dart';
 import 'package:fl_clash/common/webdav.dart';
 import 'package:fl_clash/core/desktop/helper_client.dart';
@@ -206,19 +207,28 @@ void main() {
     test('names Smart App Control when it is on', () {
       smartAppControlStateReader = () => SmartAppControlState.on;
 
+      final message = userFacingErrorMessage(blocked, appLocalizations);
+
       expect(
-        userFacingErrorMessage(blocked, appLocalizations),
-        appLocalizations.coreBlockedBySmartAppControlTip,
+        message,
+        appLocalizations.coreBlockedBySmartAppControlTip(
+          coreName,
+          appDisplayName,
+        ),
       );
+      expect(message, contains('$coreName.exe'));
     });
 
     test('names the generic policy with its error code otherwise', () {
       smartAppControlStateReader = () => SmartAppControlState.off;
 
+      final message = userFacingErrorMessage(blocked, appLocalizations);
+
       expect(
-        userFacingErrorMessage(blocked, appLocalizations),
-        appLocalizations.coreBlockedByPolicyTip(577),
+        message,
+        appLocalizations.coreBlockedByPolicyTip(coreName, 577, appDisplayName),
       );
+      expect(message, allOf(contains('$coreName.exe'), contains('577')));
     });
 
     test('leaves other start failures on the raw description', () {

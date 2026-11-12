@@ -155,6 +155,12 @@ class BrandConfig {
       'windows_app_name',
       pattern: _asciiNamePattern,
     );
+    // It becomes the Dart appName: the autostart entry, WebDAV root and files.
+    if (windowsAppName.toLowerCase() == 'flclash') {
+      throw const BrandConfigException(
+        'windows_app_name "FlClash" is upstream',
+      );
+    }
     final urlScheme = reader.string('url_scheme', pattern: _urlSchemePattern);
     if (reservedUrlSchemes.contains(urlScheme)) {
       throw BrandConfigException('url_scheme "$urlScheme" is reserved');

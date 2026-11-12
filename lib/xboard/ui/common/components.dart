@@ -77,6 +77,7 @@ class XcButton extends StatelessWidget {
     final style = ElasticPress.buttonStyle.merge(
       FilledButton.styleFrom(
         minimumSize: Size(expand ? double.infinity : 0, height),
+        visualDensity: VisualDensity.standard,
         tapTargetSize: gradient ? MaterialTapTargetSize.shrinkWrap : null,
         padding: EdgeInsets.symmetric(
           horizontal: variant == XcButtonVariant.ghost
@@ -572,6 +573,7 @@ class XcCallout extends StatelessWidget {
           if (onDismiss != null)
             IconButton(
               tooltip: dismissTooltip,
+              visualDensity: VisualDensity.standard,
               onPressed: onDismiss,
               icon: GlyphIcon(AppGlyphs.close, size: 18, color: colors.muted),
             )
@@ -746,30 +748,82 @@ class XcFieldTheme extends StatelessWidget {
     final colors = XcColors.of(context);
     final shape = AppShape.input.copyWith(borderRadius: AppRadius.md);
     final none = shape.copyWith(borderSide: BorderSide.none);
-    return InputDecorationTheme(
-      data: InputDecorationTheme.of(context).copyWith(
-        filled: true,
-        fillColor: context.raisedSurfaceLevel.colorOf(scheme),
-        hoverColor: Colors.transparent,
-        floatingLabelBehavior: floating
-            ? FloatingLabelBehavior.auto
-            : FloatingLabelBehavior.never,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: XcSpace.md,
-          vertical: 18,
+    return XcStandardDensity(
+      child: InputDecorationTheme(
+        data: InputDecorationTheme.of(context).copyWith(
+          filled: true,
+          fillColor: context.raisedSurfaceLevel.colorOf(scheme),
+          hoverColor: Colors.transparent,
+          floatingLabelBehavior: floating
+              ? FloatingLabelBehavior.auto
+              : FloatingLabelBehavior.never,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: XcSpace.md,
+            vertical: 18,
+          ),
+          prefixIconColor: colors.muted,
+          suffixIconColor: colors.muted,
+          border: none,
+          enabledBorder: none,
+          disabledBorder: none,
+          errorBorder: none,
+          focusedBorder: shape.copyWith(
+            borderSide: BorderSide(color: scheme.primary, width: 2),
+          ),
+          focusedErrorBorder: shape.copyWith(
+            borderSide: BorderSide(color: scheme.error, width: 2),
+          ),
         ),
-        prefixIconColor: colors.muted,
-        suffixIconColor: colors.muted,
-        border: none,
-        enabledBorder: none,
-        disabledBorder: none,
-        errorBorder: none,
-        focusedBorder: shape.copyWith(
-          borderSide: BorderSide(color: scheme.primary, width: 2),
-        ),
-        focusedErrorBorder: shape.copyWith(
-          borderSide: BorderSide(color: scheme.error, width: 2),
-        ),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Errors appear on the first [XcFormState.validate], then follow each edit.
+class XcForm extends StatefulWidget {
+  const XcForm({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<XcForm> createState() => XcFormState();
+}
+
+class XcFormState extends State<XcForm> {
+  final _form = GlobalKey<FormState>();
+  bool _submitted = false;
+
+  bool validate() {
+    if (!_submitted) setState(() => _submitted = true);
+    return _form.currentState!.validate();
+  }
+
+  @override
+  Widget build(BuildContext context) => Form(
+    key: _form,
+    autovalidateMode: _submitted
+        ? AutovalidateMode.onUserInteraction
+        : AutovalidateMode.disabled,
+    child: widget.child,
+  );
+}
+
+/// Windows and macOS default Material to compact density, 8 dp shorter than
+/// the sizes in DESIGN-SYSTEM.md; brand pages pin the standard one instead.
+class XcStandardDensity extends StatelessWidget {
+  const XcStandardDensity({super.key, required this.child});
+
+  final Widget child;
+
+  static final _themes = Expando<ThemeData>();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      data: _themes[theme] ??= theme.copyWith(
+        visualDensity: VisualDensity.standard,
       ),
       child: child,
     );

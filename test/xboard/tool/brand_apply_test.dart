@@ -115,6 +115,7 @@ void main() {
       'no release keys': {'rel_pub_keys': <String, Object?>{}},
       'an unknown key': {'brand_name': 'x'},
       'a non-ASCII Windows name': {'windows_app_name': '加速器'},
+      'the upstream app name': {'windows_app_name': 'FLCLASH'},
       'a quote in the publisher': {'publisher': 'A "B"'},
       'schema 2': {'schema': 2},
     };
