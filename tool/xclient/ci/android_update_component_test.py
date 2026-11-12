@@ -326,6 +326,62 @@ class ComponentGuardTest(unittest.TestCase):
             self.assertEqual(receipt, {'component_step': 'hello-1.json'})
             self.assertEqual(json.loads((output / 'receipts/component-result.json').read_text()), {'step': 'hello-1.json'})
 
+    def control_driver(self, *, store=None, fail=None):
+        """A guest with adb's stdin rules: exec-out never forwards it, shell does."""
+        driver = component.ComponentDriver.__new__(component.ComponentDriver)
+        driver.relative, driver.report, driver.verify = 'cache/xclient-update-qa-' + 'd' * 32, {}, Mock()
+        files, calls = {}, []
+
+        def call(*argv, data=None, **_):
+            calls.append((argv[:2], data is not None and len(data) > 0))
+            if fail and fail[0](argv):
+                raise component.qa.Refused('owned_command_failed', fail[1])
+            stdin = data if argv[:2] == ('shell', '-T') and data is not None else b''
+            text = argv[-1]
+            if argv[-2] == 'sha256sum':
+                return (component.hashlib.sha256(files[text]).hexdigest() + '  ' + text + '\n').encode()
+            path = re.search(r'(cache/[A-Za-z0-9-]+/[A-Za-z0-9.-]+?)(?:\.pending)? ', text + ' ')[1]
+            if 'cat > ' in text:
+                files[path] = (store or (lambda value: value))(stdin)
+                return b''
+            if text.startswith("'wc -c < "):
+                return (str(len(files[path])) + '\n' + component.hashlib.sha256(files[path]).hexdigest() + '  ' + path + '\n').encode()
+            raise AssertionError(argv)
+
+        driver.device = Mock(call=Mock(side_effect=call))
+        return driver, files, calls
+
+    def test_control_bytes_reach_the_guest_over_the_shell_protocol(self):
+        data = component.encoded({'stage': '1', 'value': 'lease'})
+        driver, files, calls = self.control_driver()
+        driver.stage_bytes('lease-1.json', data)
+        self.assertEqual(files[driver.relative + '/lease-1.json'], data)
+        self.assertEqual(calls, [(('shell', '-T'), True), (('shell', '-T'), False)])
+
+    def test_a_control_file_the_guest_did_not_receive_whole_fails_with_bounded_diagnostics(self):
+        data = b'{"token": "PRIVATE-VALUE"}'
+        for store, guest_bytes in ((lambda value: b'', 0), (lambda value: value[:-1] + b'!', len(data))):
+            with self.subTest(guest_bytes=guest_bytes):
+                driver, _, _ = self.control_driver(store=store)
+                with self.assertRaisesRegex(component.qa.Refused, '^component_guest_control_hash_mismatch$'):
+                    driver.stage_bytes('lease-1.json', data)
+                failure = driver.report['control_failure']
+                self.assertEqual({key: failure[key] for key in ('step', 'bytes', 'adb_exit_code', 'guest_bytes', 'guest_empty', 'digest_matches')}, {'step': 'lease-1.json', 'bytes': len(data), 'adb_exit_code': 0, 'guest_bytes': guest_bytes, 'guest_empty': guest_bytes == 0, 'digest_matches': False})
+                self.assertGreater(failure['readback_bytes'], 64)
+                self.assertNotIn('PRIVATE', json.dumps(driver.report))
+
+    def test_a_failed_guest_write_or_readback_keeps_the_adb_exit_code(self):
+        cases = (
+            (lambda argv: 'cat > ' in argv[-1], 'component_guest_control_write_failed'),
+            (lambda argv: argv[-1].startswith("'wc -c < "), 'component_guest_control_readback_failed'),
+        )
+        for matches, code in cases:
+            with self.subTest(code=code):
+                driver, _, _ = self.control_driver(fail=(matches, 1))
+                with self.assertRaisesRegex(component.qa.Refused, '^' + code + '$'):
+                    driver.stage_bytes('arm-1.json', b'{}')
+                self.assertEqual(driver.report['control_failure'], {'step': 'arm-1.json', 'bytes': 2, 'adb_exit_code': 1})
+
     def test_paired_export_import_keeps_bytes_and_artifact_owner_separate(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()

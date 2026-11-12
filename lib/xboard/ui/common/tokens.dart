@@ -20,6 +20,7 @@ abstract final class XcSpace {
 
   static const double minTouch = 48;
   static const double formWidth = 420;
+  static const double readingWidth = 880;
   static const double contentWidth = 1120;
 
   static double gutterOf(double width) => width >= XcBreakpoint.desktop

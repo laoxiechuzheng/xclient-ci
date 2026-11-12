@@ -35,6 +35,43 @@ double getItemHeight(ProxyCardType proxyCardType) {
 double getRowExtent(ProxyCardType proxyCardType) =>
     getItemHeight(proxyCardType) + proxyGridSpacing;
 
+/// Lets the page around a [ProxiesView] draw its proxies its own way.
+class ProxiesViewOverride extends InheritedWidget {
+  const ProxiesViewOverride({
+    super.key,
+    required this.groupBody,
+    required this.card,
+    required this.selectedOffset,
+    required super.child,
+  });
+
+  final Widget Function(
+    Group group,
+    ScrollController controller,
+    int columns,
+    ProxyCardType cardType,
+  )
+  groupBody;
+
+  final Widget Function(
+    String groupName,
+    GroupType groupType,
+    Proxy proxy,
+    String? testUrl,
+    ProxyCardType cardType,
+  )
+  card;
+
+  final double? Function(Group group, String? selectedProxyName, int columns)
+  selectedOffset;
+
+  static ProxiesViewOverride? maybeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<ProxiesViewOverride>();
+
+  @override
+  bool updateShouldNotify(ProxiesViewOverride oldWidget) => false;
+}
+
 class GroupOffsets {
   const GroupOffsets(this.groups, this.offsets);
 

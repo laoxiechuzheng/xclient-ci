@@ -10,6 +10,8 @@ import 'package:fl_clash/widgets/widgets.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'common.dart';
+
 void selectGroupProxy(
   WidgetRef ref, {
   required String groupName,
@@ -133,6 +135,9 @@ class ProxyCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (ProxiesViewOverride.maybeOf(context) case final override?) {
+      return override.card(groupName, groupType, proxy, testUrl, type);
+    }
     final measure = globalState.measure;
     final isLoose = type == ProxyCardType.loose;
     final delayText = _DelayText(

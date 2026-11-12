@@ -87,6 +87,9 @@ final _tokens = <String, RegExp>{
         alias: RegExp('(^|[^a-z])${RegExp.escape(alias)}([^a-z]|\$)'),
 };
 
+/// The Chinese name of a region [classifyRegion] returns.
+String? regionName(String code) => _regions[code]?.elementAtOrNull(1);
+
 String? classifyRegion(String name) {
   final value = name.toLowerCase();
   for (final entry in _regions.entries) {

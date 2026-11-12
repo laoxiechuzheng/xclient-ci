@@ -1,8 +1,13 @@
+import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/api/xboard_api.dart';
+import '../common/components.dart';
+import '../common/errors.dart';
 import '../common/format.dart';
 import '../common/commerce.dart';
+import '../common/motion.dart';
+import '../common/tokens.dart';
 import '../common/widgets.dart';
 import 'support_pages.dart';
 
@@ -22,6 +27,8 @@ class _XcGiftCardsPageState extends State<XcGiftCardsPage> {
   final _code = TextEditingController();
   Map<String, dynamic>? _preview;
   String? _checkedCode;
+  String? _checkError;
+  String? _redeemed;
   int _page = 1;
   int _revision = 0;
   @override
@@ -36,7 +43,17 @@ class _XcGiftCardsPageState extends State<XcGiftCardsPage> {
       xcMessage(context, '请输入 8–32 位礼品卡码');
       return;
     }
-    final preview = await widget.api.giftCardCheck(code);
+    setState(() {
+      _checkError = null;
+      _redeemed = null;
+    });
+    final Map<String, dynamic> preview;
+    try {
+      preview = await widget.api.giftCardCheck(code);
+    } catch (error) {
+      if (mounted) setState(() => _checkError = xcErrorText(error));
+      return;
+    }
     if (mounted && _code.text.trim() == code) {
       setState(() {
         _preview = preview;
@@ -53,93 +70,156 @@ class _XcGiftCardsPageState extends State<XcGiftCardsPage> {
     if (!await xcConfirm(context, '兑换礼品卡', '确认兑换当前礼品卡？奖励以服务器结算结果为准。')) return;
     final result = await widget.api.giftCardRedeem(code);
     if (!mounted) return;
+    final message = '${result['message'] ?? '兑换成功'}';
     setState(() {
       _preview = null;
       _checkedCode = null;
+      _redeemed = message;
       _revision++;
     });
     _code.clear();
-    xcMessage(context, '${result['message'] ?? '兑换成功'}');
+    xcMessage(context, message);
     await widget.onRedeemed();
   }
 
-  @override
-  Widget build(BuildContext context) => XcPage(
-    title: '礼品卡',
-    child: Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            spacing: 12,
+  Widget? _result() {
+    if (_redeemed case final message?) {
+      return XcCallout(
+        tone: XcTone.success,
+        glyph: AppGlyphs.checkCircle,
+        title: '兑换成功',
+        message: '$message。账户与节点会自动刷新。',
+      );
+    }
+    if (_checkError case final error?) {
+      return XcCallout(
+        tone: XcTone.danger,
+        glyph: AppGlyphs.error,
+        title: '礼品卡检查失败',
+        message: error,
+      );
+    }
+    final preview = _preview;
+    if (preview == null) return null;
+    final status = (preview['code_info'] as Map?)?['status_name'];
+    return XcFormat.toBool(preview['can_redeem'])
+        ? XcCallout(
+            tone: XcTone.success,
+            glyph: AppGlyphs.star,
+            title: '可以兑换',
+            message: status == null ? '确认后奖励会发放到你的账户。' : '礼品卡状态：$status',
             children: [
-              TextField(
-                controller: _code,
-                decoration: const InputDecoration(labelText: '礼品卡码'),
-                autocorrect: false,
-                onChanged: (_) {
-                  if (_preview != null) {
-                    setState(() {
-                      _preview = null;
-                      _checkedCode = null;
-                    });
-                  }
-                },
+              Padding(
+                padding: const EdgeInsets.only(top: XcSpace.xs),
+                child: XcRewards(rewards: preview['reward_preview']),
               ),
-              Row(
-                spacing: 12,
+            ],
+          )
+        : XcCallout(
+            tone: XcTone.danger,
+            glyph: AppGlyphs.block,
+            title: '暂时不能兑换',
+            message: '${preview['reason'] ?? '当前不可兑换'}',
+            children: [
+              if (status != null)
+                Text('礼品卡状态：$status', style: XcType.caption(context)),
+            ],
+          );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gutter = XcSpace.gutterOf(MediaQuery.sizeOf(context).width);
+    final result = _result();
+    return XcPage(
+      title: '礼品卡',
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(gutter, XcSpace.xs, gutter, 0),
+            child: XcEntrance(
+              child: XcSection(
+                title: '兑换礼品卡',
+                glyph: AppGlyphs.star,
                 children: [
-                  Expanded(
-                    child: XcTaskButton(
-                      label: '检查礼品卡',
-                      tonal: true,
-                      action: _check,
+                  Text(
+                    '输入礼品卡码，先检查能获得什么奖励，再确认兑换。',
+                    style: XcType.caption(context),
+                  ),
+                  XcFieldTheme(
+                    child: TextField(
+                      controller: _code,
+                      decoration: const InputDecoration(
+                        labelText: '礼品卡码',
+                        prefixIcon: GlyphIcon(AppGlyphs.key, size: 20),
+                      ),
+                      autocorrect: false,
+                      onChanged: (_) {
+                        if (_preview != null || _checkError != null) {
+                          setState(() {
+                            _preview = null;
+                            _checkedCode = null;
+                            _checkError = null;
+                          });
+                        }
+                      },
                     ),
                   ),
-                  Expanded(
-                    child: XcTaskButton(
-                      label: '确认兑换',
-                      enabled:
-                          _checkedCode == _code.text.trim() &&
-                          XcFormat.toBool(_preview?['can_redeem']),
-                      action: _redeem,
-                    ),
+                  Row(
+                    spacing: XcSpace.sm,
+                    children: [
+                      Expanded(
+                        child: XcTaskButton(
+                          label: '检查礼品卡',
+                          loadingLabel: '检查中',
+                          variant: XcButtonVariant.secondary,
+                          action: _check,
+                        ),
+                      ),
+                      Expanded(
+                        child: XcTaskButton(
+                          label: '确认兑换',
+                          loadingLabel: '兑换中',
+                          enabled:
+                              _checkedCode == _code.text.trim() &&
+                              XcFormat.toBool(_preview?['can_redeem']),
+                          action: _redeem,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
+            ),
           ),
-        ),
-        Expanded(
-          child: XcLoad<XbPage>(
-            key: ValueKey('$_page:$_revision'),
-            load: () => widget.api.giftCardHistory(page: _page),
-            builder: (context, data, refresh) => xcList([
-              if (_preview case final preview?)
-                XcSection(
-                  title: '奖励预览',
-                  children: [
-                    XcValue(
-                      '状态',
-                      (preview['code_info'] as Map?)?['status_name'],
+          Expanded(
+            child: XcLoad<XbPage>(
+              key: ValueKey('$_page:$_revision'),
+              load: () => widget.api.giftCardHistory(page: _page),
+              builder: (context, data, refresh) => xcList([
+                if (result != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: XcSpace.md),
+                    child: XcSwap(
+                      value: (_redeemed, _checkError, _checkedCode),
+                      alignment: Alignment.topLeft,
+                      child: result,
                     ),
-                    XcRewards(rewards: preview['reward_preview']),
-                    if (!XcFormat.toBool(preview['can_redeem']))
-                      Text('${preview['reason'] ?? '当前不可兑换'}'),
-                  ],
-                ),
-              const Text('兑换历史'),
-              if (data.items.isEmpty) const Text('暂无兑换记录'),
-              for (final record in data.items)
-                XcSection(
-                  title: '${record['template_name'] ?? '礼品卡'}',
-                  children: [
-                    XcValue('卡码', record['code']),
-                    XcValue('兑换时间', XcFormat.date(record['created_at'])),
-                    XcValue('类型', record['template_type_name']),
-                    XcRewards(rewards: record['rewards_given']),
-                    TextButton(
+                  ),
+                const XcSectionHeader(title: '兑换历史'),
+                if (data.items.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: XcSpace.md),
+                    child: Text('暂无兑换记录', style: XcType.secondary(context)),
+                  ),
+                for (final record in data.items)
+                  XcSection(
+                    title: '${record['template_name'] ?? '礼品卡'}',
+                    glyph: AppGlyphs.star,
+                    trailing: XcButton(
+                      label: '查看详情',
+                      size: XcButtonSize.small,
+                      variant: XcButtonVariant.ghost,
                       onPressed: () => xcPush(
                         context,
                         XcGiftCardDetailPage(
@@ -147,21 +227,26 @@ class _XcGiftCardsPageState extends State<XcGiftCardsPage> {
                           id: XcFormat.toInt(record['id'])!,
                         ),
                       ),
-                      child: const Text('查看详情'),
                     ),
-                  ],
+                    children: [
+                      XcValue('卡码', record['code']),
+                      XcValue('兑换时间', XcFormat.date(record['created_at'])),
+                      XcValue('类型', record['template_type_name']),
+                      XcRewards(rewards: record['rewards_given']),
+                    ],
+                  ),
+                XcPagination(
+                  page: _page,
+                  hasNext: _page * 15 < data.total,
+                  onPage: (next) => setState(() => _page = next),
                 ),
-              XcPagination(
-                page: _page,
-                hasNext: _page * 15 < data.total,
-                onPage: (next) => setState(() => _page = next),
-              ),
-            ]),
+              ]),
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 class XcGiftCardDetailPage extends StatelessWidget {
@@ -176,6 +261,7 @@ class XcGiftCardDetailPage extends StatelessWidget {
       builder: (context, data, refresh) => xcList([
         XcSection(
           title: '${data['template_name'] ?? '礼品卡'}',
+          glyph: AppGlyphs.star,
           children: [
             XcValue('卡码', data['code']),
             XcValue('兑换时间', XcFormat.date(data['created_at'])),
@@ -186,6 +272,7 @@ class XcGiftCardDetailPage extends StatelessWidget {
         if (data['invite_rewards'] != null)
           XcSection(
             title: '邀请奖励',
+            glyph: AppGlyphs.link,
             children: [XcRewards(rewards: data['invite_rewards'])],
           ),
       ]),
@@ -199,10 +286,12 @@ class XcRewards extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final value = rewards;
-    if (value is! Map) return const Text('奖励以服务器结算结果为准');
+    if (value is! Map) {
+      return Text('奖励以服务器结算结果为准', style: XcType.caption(context));
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      spacing: 8,
+      spacing: XcSpace.xs,
       children: [
         if (value['balance'] != null)
           XcValue('余额奖励', context.xcMoney(value['balance'])),
@@ -216,8 +305,9 @@ class XcRewards extends StatelessWidget {
           XcValue('套餐', value['plan_name'] ?? '#${value['plan_id']}'),
         if (value['device_limit'] != null)
           XcValue('增加设备数', value['device_limit']),
-        if (XcFormat.toBool(value['reset_package'])) const Text('重置当前流量'),
-        if (value.isEmpty) const Text('暂无奖励信息'),
+        if (XcFormat.toBool(value['reset_package']))
+          Text('重置当前流量', style: XcType.secondary(context)),
+        if (value.isEmpty) Text('暂无奖励信息', style: XcType.caption(context)),
       ],
     );
   }

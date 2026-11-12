@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../providers.dart';
+import 'tokens.dart';
 
 class XcExitAction extends ConsumerStatefulWidget {
   const XcExitAction({super.key});
@@ -32,10 +33,18 @@ class _XcExitActionState extends ConsumerState<XcExitAction> {
     if (!ref.watch(xcManagedAndroidProvider)) return const SizedBox.shrink();
     final closing = ref.watch(xcClosingProvider) || _pending;
     final running = ref.watch(isStartProvider);
+    final colors = XcColors.of(context);
     return TextButton.icon(
       key: const Key('xc-client-exit'),
       onPressed: closing ? null : _exit,
-      icon: const GlyphIcon(AppGlyphs.close),
+      style: TextButton.styleFrom(
+        foregroundColor: colors.danger,
+        disabledForegroundColor: colors.muted,
+        minimumSize: const Size(0, XcSpace.minTouch),
+        padding: const EdgeInsets.symmetric(horizontal: XcSpace.md),
+        textStyle: XcType.label(context),
+      ),
+      icon: GlyphIcon(closing ? AppGlyphs.sync : AppGlyphs.vpn, size: 20),
       label: Text(
         closing
             ? '正在退出…'

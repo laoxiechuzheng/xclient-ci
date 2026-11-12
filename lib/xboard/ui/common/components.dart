@@ -380,21 +380,25 @@ class XcMeter extends StatelessWidget {
           ),
           child: Align(
             alignment: AlignmentDirectional.centerStart,
-            child: FractionallySizedBox(
-              widthFactor: shown <= 0 ? 0 : math.max(shown, 0.02),
-              heightFactor: 1,
-              child: DecoratedBox(
-                decoration: ShapeDecoration(
-                  gradient: tone == XcTone.accent
-                      ? LinearGradient(
-                          colors: [colors.accentLight, colors.accent],
-                        )
-                      : null,
-                  color: tone == XcTone.accent ? null : colors.vividOf(tone),
-                  shape: AppShape.full,
-                ),
-              ),
-            ),
+            child: shown <= 0
+                ? const SizedBox.shrink()
+                : FractionallySizedBox(
+                    widthFactor: math.max(shown, 0.02),
+                    heightFactor: 1,
+                    child: DecoratedBox(
+                      decoration: ShapeDecoration(
+                        gradient: tone == XcTone.accent
+                            ? LinearGradient(
+                                colors: [colors.accentLight, colors.accent],
+                              )
+                            : null,
+                        color: tone == XcTone.accent
+                            ? null
+                            : colors.vividOf(tone),
+                        shape: AppShape.full,
+                      ),
+                    ),
+                  ),
           ),
         ),
       ),
@@ -728,9 +732,12 @@ class XcBannerSlot extends StatelessWidget {
 /// Filled fields for forms on a card: the fill is one level above the card,
 /// and only focus draws a stroke, as `.agents/surfaces.md` sets inputs.
 class XcFieldTheme extends StatelessWidget {
-  const XcFieldTheme({super.key, required this.child});
+  const XcFieldTheme({super.key, required this.child, this.floating = false});
 
   final Widget child;
+
+  /// Keeps the label above a filled field, for forms with several fields.
+  final bool floating;
 
   @override
   Widget build(BuildContext context) {
@@ -743,7 +750,9 @@ class XcFieldTheme extends StatelessWidget {
         filled: true,
         fillColor: context.raisedSurfaceLevel.colorOf(scheme),
         hoverColor: Colors.transparent,
-        floatingLabelBehavior: FloatingLabelBehavior.never,
+        floatingLabelBehavior: floating
+            ? FloatingLabelBehavior.auto
+            : FloatingLabelBehavior.never,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: XcSpace.md,
           vertical: 18,

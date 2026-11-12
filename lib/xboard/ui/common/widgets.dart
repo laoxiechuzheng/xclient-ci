@@ -1,16 +1,15 @@
 import 'dart:async';
 
+import 'package:fl_clash/ui/context.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
-import 'package:fl_clash/ui/shape.dart';
-import 'package:fl_clash/ui/typography.dart';
 import 'package:fl_clash/ui/switch.dart';
-import 'package:fl_clash/ui/surface.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:fl_clash/ui/loading.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'components.dart';
 import 'errors.dart';
+import 'motion.dart';
 import 'tokens.dart';
 
 Future<bool> xcOpenExternal(Uri uri) async {
@@ -63,46 +62,76 @@ class XcPage extends StatelessWidget {
     required this.title,
     required this.child,
     this.actions,
+    this.bottom,
   });
   final String title;
   final Widget child;
   final List<Widget>? actions;
+
+  /// Stays below the content, for an action that must remain in reach.
+  final Widget? bottom;
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: SurfaceLevel.page.colorOf(Theme.of(context).colorScheme),
-    appBar: AppBar(
-      title: Text(title, style: AppTextStyle.pageTitle.of(context)),
-      actions: actions,
-    ),
-    body: SafeArea(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1040),
-          child: child,
+  Widget build(BuildContext context) {
+    final colors = XcColors.of(context);
+    return Scaffold(
+      backgroundColor: colors.page,
+      appBar: AppBar(
+        backgroundColor: colors.page,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        titleSpacing: XcSpace.xs,
+        title: Text(title, style: XcType.title(context)),
+        actions: actions,
+      ),
+      bottomNavigationBar: bottom,
+      body: SafeArea(
+        top: false,
+        bottom: bottom == null,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: XcSpace.readingWidth),
+            child: child,
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class XcSection extends StatelessWidget {
-  const XcSection({super.key, this.title, required this.children});
+  const XcSection({
+    super.key,
+    this.title,
+    this.glyph,
+    this.trailing,
+    required this.children,
+  });
   final String? title;
+  final Glyph? glyph;
+  final Widget? trailing;
   final List<Widget> children;
   @override
-  Widget build(BuildContext context) => Card(
-    margin: const EdgeInsets.only(bottom: 16),
-    shape: AppShape.xl.copyWith(side: BorderSide.none),
-    color: SurfaceLevel.card.colorOf(Theme.of(context).colorScheme),
-    elevation: 0,
-    child: Padding(
-      padding: const EdgeInsets.all(20),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: XcSpace.md),
+    child: XcPanel(
+      elevated: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        spacing: 12,
+        mainAxisSize: MainAxisSize.min,
+        spacing: XcSpace.sm,
         children: [
-          if (title != null)
-            Text(title!, style: AppTextStyle.headline.of(context)),
+          if (title != null || trailing != null)
+            Row(
+              spacing: XcSpace.xs,
+              children: [
+                if (glyph case final glyph?)
+                  GlyphIcon(glyph, size: 18, color: XcColors.of(context).muted),
+                Expanded(
+                  child: Text(title ?? '', style: XcType.headline(context)),
+                ),
+                ?trailing,
+              ],
+            ),
           ...children,
         ],
       ),
@@ -111,27 +140,26 @@ class XcSection extends StatelessWidget {
 }
 
 class XcValue extends StatelessWidget {
-  const XcValue(this.label, this.value, {super.key});
+  const XcValue(this.label, this.value, {super.key, this.strong = false});
   final String label;
   final Object? value;
+
+  /// Sets the value as the figure a reader looks for, such as a total.
+  final bool strong;
   @override
   Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Expanded(
-        child: Text(
-          label,
-          style: AppTextStyle.body
-              .of(context)
-              .copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
-        ),
+      ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 140),
+        child: Text(label, style: XcType.secondary(context)),
       ),
-      const SizedBox(width: 16),
+      const SizedBox(width: XcSpace.md),
       Expanded(
         child: SelectableText(
           '${value ?? '—'}',
           textAlign: TextAlign.end,
-          style: AppTextStyle.body.of(context),
+          style: strong ? XcType.metric(context) : XcType.value(context),
         ),
       ),
     ],
@@ -149,8 +177,10 @@ class XcTaskButton extends StatefulWidget {
     this.size = XcButtonSize.medium,
     this.glyph,
     this.expand = false,
+    this.loadingLabel,
   });
   final String label;
+  final String? loadingLabel;
   final Future<void> Function() action;
   final bool tonal;
   final bool enabled;
@@ -179,6 +209,7 @@ class _XcTaskButtonState extends State<XcTaskButton> {
   @override
   Widget build(BuildContext context) => XcButton(
     label: widget.label,
+    loadingLabel: widget.loadingLabel,
     loading: _busy,
     glyph: widget.glyph,
     size: widget.size,
@@ -280,11 +311,31 @@ class _XcLoadState<T> extends State<XcLoad<T>> {
   );
 }
 
-Widget xcList(List<Widget> children) => ListView(
-  padding: const EdgeInsets.all(20),
-  physics: const AlwaysScrollableScrollPhysics(),
-  children: children,
-);
+Widget xcList(List<Widget> children) => _XcList(children: children);
+
+/// A page's scrolling column: gutters by width, clear of anything floating
+/// over its foot, each block rising in after the one above it.
+class _XcList extends StatelessWidget {
+  const _XcList({required this.children});
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) {
+    final gutter = XcSpace.gutterOf(MediaQuery.sizeOf(context).width);
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+        gutter,
+        XcSpace.xs,
+        gutter,
+        XcSpace.xl + context.bottomInset,
+      ),
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        for (final (index, child) in children.indexed)
+          XcEntrance(index: index, child: child),
+      ],
+    );
+  }
+}
 
 class XcMenuRow extends StatelessWidget {
   const XcMenuRow({
@@ -292,16 +343,53 @@ class XcMenuRow extends StatelessWidget {
     required this.title,
     this.subtitle,
     required this.onTap,
+    this.glyph,
+    this.tone = XcTone.accent,
+    this.trailing,
   });
   final String title;
   final String? subtitle;
   final VoidCallback onTap;
+  final Glyph? glyph;
+  final XcTone tone;
+  final Widget? trailing;
   @override
-  Widget build(BuildContext context) => ListTile(
-    title: Text(title),
-    subtitle: subtitle == null ? null : Text(subtitle!),
-    trailing: const GlyphIcon(AppGlyphs.chevronForward),
-    onTap: onTap,
+  Widget build(BuildContext context) => Material(
+    type: MaterialType.transparency,
+    child: InkWell(
+      customBorder: XcRadius.tile,
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: XcSpace.minTouch + 4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: XcSpace.xs),
+          child: Row(
+            spacing: XcSpace.sm,
+            children: [
+              if (glyph case final glyph?)
+                XcGlyphWell(glyph: glyph, tone: tone, size: 36),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 2,
+                  children: [
+                    Text(title, style: XcType.body(context)),
+                    if (subtitle case final subtitle?)
+                      Text(subtitle, style: XcType.caption(context)),
+                  ],
+                ),
+              ),
+              ?trailing,
+              GlyphIcon(
+                AppGlyphs.chevronForward,
+                size: 18,
+                color: XcColors.of(context).muted,
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
   );
 }
 
@@ -311,8 +399,10 @@ class XcToggleTile extends StatefulWidget {
     required this.label,
     required this.value,
     required this.onChanged,
+    this.subtitle,
   });
   final String label;
+  final String? subtitle;
   final bool value;
   final Future<void> Function(bool value) onChanged;
   @override
@@ -334,12 +424,46 @@ class _XcToggleTileState extends State<XcToggleTile> {
   }
 
   @override
-  Widget build(BuildContext context) => ListTile(
-    title: Text(widget.label),
-    trailing: CommonSwitch(
-      value: widget.value,
-      semanticLabel: widget.label,
-      onChanged: _busy ? null : _change,
+  Widget build(BuildContext context) => XcToggleRow(
+    label: widget.label,
+    subtitle: widget.subtitle,
+    value: widget.value,
+    onChanged: _busy ? null : _change,
+  );
+}
+
+/// A labelled switch laid out like an [XcMenuRow].
+class XcToggleRow extends StatelessWidget {
+  const XcToggleRow({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    this.subtitle,
+  });
+  final String label;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(minHeight: XcSpace.minTouch + 4),
+    child: Row(
+      spacing: XcSpace.sm,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 2,
+            children: [
+              Text(label, style: XcType.body(context)),
+              if (subtitle case final subtitle?)
+                Text(subtitle, style: XcType.caption(context)),
+            ],
+          ),
+        ),
+        CommonSwitch(value: value, semanticLabel: label, onChanged: onChanged),
+      ],
     ),
   );
 }

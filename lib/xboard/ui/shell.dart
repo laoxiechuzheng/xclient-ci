@@ -181,7 +181,7 @@ class _XcAppShellState extends ConsumerState<XcAppShell> {
     };
     final (pageTitle, pageSubtitle) = switch (_index) {
       2 => ('选购套餐', '支付成功后自动生效，可随时续费或升级'),
-      3 => ('我的账户', session.user?['email'] as String?),
+      3 => ('我的账户', '订单、权益与账户安全'),
       _ => (null, null),
     };
     return XcShellLayout(
@@ -315,6 +315,7 @@ class XcShellLayout extends StatelessWidget {
       if (!desktop) {
         return Scaffold(
           backgroundColor: colors.page,
+          extendBody: true,
           body: SafeArea(bottom: false, child: content),
           bottomNavigationBar: XcBottomNav(
             destinations: destinations,

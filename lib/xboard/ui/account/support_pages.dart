@@ -1,9 +1,12 @@
-import 'package:fl_clash/ui/typography.dart';
+import 'package:fl_clash/ui/icons/icons.dart';
+import 'package:fl_clash/ui/shape.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/api/xboard_api.dart';
+import '../common/components.dart';
 import '../common/format.dart';
 import '../common/rich_content.dart';
+import '../common/tokens.dart';
 import '../common/widgets.dart';
 
 class XcNoticesPage extends StatefulWidget {
@@ -22,14 +25,29 @@ class _XcNoticesPageState extends State<XcNoticesPage> {
       key: ValueKey(_page),
       load: () => widget.api.notices(page: _page),
       builder: (context, data, refresh) => xcList([
-        if (data.items.isEmpty) const Text('暂无公告'),
+        if (data.items.isEmpty)
+          const XcStateView(
+            glyph: AppGlyphs.info,
+            title: '暂无公告',
+            message: '有新的维护通知或线路更新时，会第一时间显示在这里。',
+          ),
         for (final notice in data.items)
           XcSection(
             title: '${notice['title'] ?? '公告'}',
             children: [
-              Text(
-                XcFormat.date(notice['created_at']),
-                style: AppTextStyle.footnote.of(context),
+              Row(
+                spacing: 6,
+                children: [
+                  GlyphIcon(
+                    AppGlyphs.clock,
+                    size: 14,
+                    color: XcColors.of(context).muted,
+                  ),
+                  Text(
+                    XcFormat.date(notice['created_at']),
+                    style: XcType.caption(context),
+                  ),
+                ],
               ),
               XcRichContent(
                 content: '${notice['content'] ?? notice['body'] ?? ''}',
@@ -57,21 +75,32 @@ class XcPagination extends StatelessWidget {
   final bool hasNext;
   final ValueChanged<int> onPage;
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisAlignment: MainAxisAlignment.center,
-    spacing: 12,
-    children: [
-      TextButton(
-        onPressed: page > 1 ? () => onPage(page - 1) : null,
-        child: const Text('上一页'),
+  Widget build(BuildContext context) {
+    if (page <= 1 && !hasNext) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: XcSpace.xs),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        spacing: XcSpace.sm,
+        children: [
+          XcButton(
+            label: '上一页',
+            glyph: AppGlyphs.chevronBack,
+            size: XcButtonSize.small,
+            variant: XcButtonVariant.secondary,
+            onPressed: page > 1 ? () => onPage(page - 1) : null,
+          ),
+          XcBadge(label: '第 $page 页'),
+          XcButton(
+            label: '下一页',
+            size: XcButtonSize.small,
+            variant: XcButtonVariant.secondary,
+            onPressed: hasNext ? () => onPage(page + 1) : null,
+          ),
+        ],
       ),
-      Text('第 $page 页'),
-      TextButton(
-        onPressed: hasNext ? () => onPage(page + 1) : null,
-        child: const Text('下一页'),
-      ),
-    ],
-  );
+    );
+  }
 }
 
 class XcKnowledgePage extends StatefulWidget {
@@ -91,53 +120,77 @@ class _XcKnowledgePageState extends State<XcKnowledgePage> {
   }
 
   @override
-  Widget build(BuildContext context) => XcPage(
-    title: '使用帮助',
-    child: Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: TextField(
-            controller: _search,
-            decoration: InputDecoration(
-              labelText: '搜索知识库',
-              suffixIcon: TextButton(
-                onPressed: () => setState(() => _keyword = _search.text.trim()),
-                child: const Text('搜索'),
+  Widget build(BuildContext context) {
+    final gutter = XcSpace.gutterOf(MediaQuery.sizeOf(context).width);
+    return XcPage(
+      title: '使用帮助',
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              gutter,
+              XcSpace.xs,
+              gutter,
+              XcSpace.sm,
+            ),
+            child: XcFieldTheme(
+              child: TextField(
+                controller: _search,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  labelText: '搜索知识库',
+                  prefixIcon: const GlyphIcon(AppGlyphs.search, size: 20),
+                  suffixIcon: Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: XcButton(
+                      label: '搜索',
+                      size: XcButtonSize.small,
+                      variant: XcButtonVariant.ghost,
+                      onPressed: () =>
+                          setState(() => _keyword = _search.text.trim()),
+                    ),
+                  ),
+                ),
+                onSubmitted: (value) => setState(() => _keyword = value.trim()),
               ),
             ),
-            onSubmitted: (value) => setState(() => _keyword = value.trim()),
           ),
-        ),
-        Expanded(
-          child: XcLoad<Map<String, List<Map<String, dynamic>>>>(
-            key: ValueKey(_keyword),
-            load: () => widget.api.knowledge(keyword: _keyword),
-            builder: (context, categories, refresh) => xcList([
-              if (categories.isEmpty) const Text('没有找到相关文章'),
-              for (final entry in categories.entries)
-                XcSection(
-                  title: entry.key,
-                  children: [
-                    for (final article in entry.value)
-                      XcMenuRow(
-                        title: '${article['title'] ?? '文章'}',
-                        onTap: () => xcPush(
-                          context,
-                          XcArticlePage(
-                            api: widget.api,
-                            id: XcFormat.toInt(article['id'])!,
+          Expanded(
+            child: XcLoad<Map<String, List<Map<String, dynamic>>>>(
+              key: ValueKey(_keyword),
+              load: () => widget.api.knowledge(keyword: _keyword),
+              builder: (context, categories, refresh) => xcList([
+                if (categories.isEmpty)
+                  const XcStateView(
+                    glyph: AppGlyphs.search,
+                    title: '没有找到相关文章',
+                    message: '换个关键词试试，或提交工单咨询客服。',
+                  ),
+                for (final entry in categories.entries)
+                  XcSection(
+                    title: entry.key,
+                    glyph: AppGlyphs.puzzle,
+                    children: [
+                      for (final article in entry.value)
+                        XcMenuRow(
+                          title: '${article['title'] ?? '文章'}',
+                          onTap: () => xcPush(
+                            context,
+                            XcArticlePage(
+                              api: widget.api,
+                              id: XcFormat.toInt(article['id'])!,
+                            ),
                           ),
                         ),
-                      ),
-                  ],
-                ),
-            ]),
+                    ],
+                  ),
+              ]),
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 class XcArticlePage extends StatelessWidget {
@@ -159,6 +212,15 @@ class XcArticlePage extends StatelessWidget {
   );
 }
 
+({XcTone tone, Glyph glyph}) _ticketStyle(Map<String, dynamic> ticket) {
+  if (XcTickets.isClosed(ticket)) {
+    return (tone: XcTone.neutral, glyph: AppGlyphs.checkCircle);
+  }
+  return XcFormat.toInt(ticket['reply_status']) == 1
+      ? (tone: XcTone.success, glyph: AppGlyphs.send)
+      : (tone: XcTone.warning, glyph: AppGlyphs.clock);
+}
+
 class XcTicketsPage extends StatelessWidget {
   const XcTicketsPage({super.key, required this.api});
   final XboardApi api;
@@ -168,32 +230,75 @@ class XcTicketsPage extends StatelessWidget {
     child: XcLoad<List<Map<String, dynamic>>>(
       load: api.tickets,
       builder: (context, tickets, refresh) => xcList([
-        FilledButton(
-          onPressed: () async {
-            await Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => XcNewTicketPage(api: api),
-              ),
-            );
-            await refresh();
-          },
-          child: const Text('提交工单'),
+        Padding(
+          padding: const EdgeInsets.only(bottom: XcSpace.md),
+          child: XcButton(
+            label: '提交工单',
+            glyph: AppGlyphs.add,
+            expand: true,
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => XcNewTicketPage(api: api),
+                ),
+              );
+              await refresh();
+            },
+          ),
         ),
         if (tickets.isEmpty)
-          const Padding(padding: EdgeInsets.all(24), child: Text('暂无工单')),
+          const XcStateView(
+            glyph: AppGlyphs.compose,
+            title: '暂无工单',
+            message: '遇到连接、支付或账户问题时，提交工单后客服会尽快回复。',
+          ),
         for (final ticket in tickets)
-          XcSection(
-            children: [
-              XcMenuRow(
-                title: '${ticket['subject'] ?? '工单'}',
-                subtitle:
-                    '${XcTickets.statusLabel(ticket)} · ${XcTickets.levelLabel(ticket['level'])}优先级 · ${XcFormat.date(ticket['created_at'])}',
-                onTap: () => xcPush(
-                  context,
-                  XcTicketPage(api: api, id: XcFormat.toInt(ticket['id'])!),
-                ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: XcSpace.sm),
+            child: XcPanel(
+              elevated: true,
+              padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+              onTap: () => xcPush(
+                context,
+                XcTicketPage(api: api, id: XcFormat.toInt(ticket['id'])!),
               ),
-            ],
+              child: Row(
+                spacing: XcSpace.sm,
+                children: [
+                  XcGlyphWell(
+                    glyph: _ticketStyle(ticket).glyph,
+                    tone: _ticketStyle(ticket).tone,
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      spacing: 2,
+                      children: [
+                        Text(
+                          '${ticket['subject'] ?? '工单'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: XcType.headline(context),
+                        ),
+                        Text(
+                          '${XcTickets.levelLabel(ticket['level'])}优先级 · ${XcFormat.date(ticket['created_at'], withTime: false)}',
+                          style: XcType.caption(context),
+                        ),
+                      ],
+                    ),
+                  ),
+                  XcBadge(
+                    label: XcTickets.statusLabel(ticket),
+                    tone: _ticketStyle(ticket).tone,
+                  ),
+                  GlyphIcon(
+                    AppGlyphs.chevronForward,
+                    size: 18,
+                    color: XcColors.of(context).muted,
+                  ),
+                ],
+              ),
+            ),
           ),
       ]),
     ),
@@ -225,37 +330,66 @@ class _XcNewTicketPageState extends State<XcNewTicketPage> {
     child: Form(
       key: _form,
       child: xcList([
+        const Padding(
+          padding: EdgeInsets.only(bottom: XcSpace.md),
+          child: XcCallout(
+            glyph: AppGlyphs.compose,
+            title: '描述得越具体，解决得越快',
+            message: '请写明遇到的问题、发生时间，以及正在使用的线路或订单号。',
+          ),
+        ),
         XcSection(
           children: [
-            TextFormField(
-              controller: _subject,
-              decoration: const InputDecoration(labelText: '工单主题'),
-              maxLength: 255,
-              validator: (value) =>
-                  value == null || value.trim().isEmpty ? '请填写主题' : null,
-            ),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final entry in XcTickets.levelLabels.entries)
-                  ChoiceChip(
-                    label: Text('${entry.value}优先级'),
-                    selected: _level == entry.key,
-                    onSelected: (_) => setState(() => _level = entry.key),
+            XcFieldTheme(
+              floating: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                spacing: XcSpace.sm,
+                children: [
+                  TextFormField(
+                    controller: _subject,
+                    decoration: const InputDecoration(labelText: '工单主题'),
+                    maxLength: 255,
+                    validator: (value) =>
+                        value == null || value.trim().isEmpty ? '请填写主题' : null,
                   ),
-              ],
-            ),
-            TextFormField(
-              controller: _message,
-              decoration: const InputDecoration(labelText: '问题描述'),
-              minLines: 5,
-              maxLines: null,
-              maxLength: 10000,
-              validator: (value) =>
-                  value == null || value.trim().isEmpty ? '请描述您的问题' : null,
+                  Text('优先级', style: XcType.label(context)),
+                  Row(
+                    spacing: XcSpace.xs,
+                    children: [
+                      for (final entry in XcTickets.levelLabels.entries)
+                        Expanded(
+                          child: _LevelChoice(
+                            label: '${entry.value}优先级',
+                            selected: _level == entry.key,
+                            onTap: () => setState(() => _level = entry.key),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: XcSpace.xxs),
+                  TextFormField(
+                    controller: _message,
+                    decoration: const InputDecoration(
+                      labelText: '问题描述',
+                      alignLabelWithHint: true,
+                    ),
+                    minLines: 5,
+                    maxLines: null,
+                    maxLength: 10000,
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? '请描述您的问题'
+                        : null,
+                  ),
+                ],
+              ),
             ),
             XcTaskButton(
               label: '提交',
+              loadingLabel: '正在提交',
+              glyph: AppGlyphs.send,
+              expand: true,
+              size: XcButtonSize.large,
               action: () async {
                 if (!_form.currentState!.validate()) return;
                 await widget.api.createTicket(
@@ -271,6 +405,56 @@ class _XcNewTicketPageState extends State<XcNewTicketPage> {
       ]),
     ),
   );
+}
+
+class _LevelChoice extends StatelessWidget {
+  const _LevelChoice({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final colors = XcColors.of(context);
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: AnimatedContainer(
+        duration: XcMotion.of(context, XcMotion.standard),
+        decoration: ShapeDecoration(
+          color: selected ? colors.accentSoft : colors.block,
+          shape: XcRadius.pill.copyWith(
+            side: BorderSide(
+              color: selected ? colors.accent : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            customBorder: XcRadius.pill,
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: XcType.secondary(
+                  context,
+                ).copyWith(color: selected ? colors.accent : colors.title),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class XcTicketPage extends StatefulWidget {
@@ -296,64 +480,172 @@ class _XcTicketPageState extends State<XcTicketPage> {
       load: () => widget.api.ticket(widget.id),
       builder: (context, ticket, refresh) {
         final messages = ticket['message'];
+        final style = _ticketStyle(ticket);
         return xcList([
           XcSection(
-            title: '${ticket['subject'] ?? '工单'}',
             children: [
-              XcValue('状态', XcTickets.statusLabel(ticket)),
-              XcValue('创建时间', XcFormat.date(ticket['created_at'])),
+              Row(
+                spacing: XcSpace.sm,
+                children: [
+                  XcGlyphWell(glyph: style.glyph, tone: style.tone),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      spacing: 2,
+                      children: [
+                        Text(
+                          '${ticket['subject'] ?? '工单'}',
+                          style: XcType.headline(context),
+                        ),
+                        Text(
+                          '创建于 ${XcFormat.date(ticket['created_at'])}',
+                          style: XcType.caption(context),
+                        ),
+                      ],
+                    ),
+                  ),
+                  XcBadge(
+                    label: XcTickets.statusLabel(ticket),
+                    tone: style.tone,
+                  ),
+                ],
+              ),
             ],
           ),
           if (messages is List)
             for (final message in messages.whereType<Map>())
-              XcSection(
-                title: XcFormat.toBool(message['is_me']) ? '我' : '客服',
-                children: [
-                  Text('${message['message'] ?? ''}'),
-                  Text(
-                    XcFormat.date(message['created_at']),
-                    style: AppTextStyle.footnote.of(context),
-                  ),
-                ],
+              _Bubble(
+                mine: XcFormat.toBool(message['is_me']),
+                text: '${message['message'] ?? ''}',
+                time: XcFormat.date(message['created_at']),
               ),
           if (!XcTickets.isClosed(ticket))
             XcSection(
+              title: '继续回复',
+              glyph: AppGlyphs.compose,
               children: [
-                TextField(
-                  controller: _reply,
-                  decoration: const InputDecoration(labelText: '回复'),
-                  minLines: 3,
-                  maxLines: null,
-                  maxLength: 10000,
+                XcFieldTheme(
+                  child: TextField(
+                    controller: _reply,
+                    decoration: const InputDecoration(labelText: '回复'),
+                    minLines: 3,
+                    maxLines: null,
+                    maxLength: 10000,
+                  ),
                 ),
-                XcTaskButton(
-                  label: '发送回复',
-                  action: () async {
-                    if (_reply.text.trim().isEmpty) {
-                      xcMessage(context, '请填写回复内容');
-                      return;
-                    }
-                    await widget.api.replyTicket(widget.id, _reply.text.trim());
-                    if (!mounted) return;
-                    _reply.clear();
-                    await refresh();
-                  },
-                ),
-                XcTaskButton(
-                  label: '关闭工单',
-                  tonal: true,
-                  action: () async {
-                    if (!await xcConfirm(context, '关闭工单', '问题已解决，确认关闭此工单？')) {
-                      return;
-                    }
-                    await widget.api.closeTicket(widget.id);
-                    await refresh();
-                  },
+                Row(
+                  spacing: XcSpace.sm,
+                  children: [
+                    Expanded(
+                      child: XcTaskButton(
+                        label: '关闭工单',
+                        variant: XcButtonVariant.secondary,
+                        action: () async {
+                          if (!await xcConfirm(
+                            context,
+                            '关闭工单',
+                            '问题已解决，确认关闭此工单？',
+                          )) {
+                            return;
+                          }
+                          await widget.api.closeTicket(widget.id);
+                          await refresh();
+                        },
+                      ),
+                    ),
+                    Expanded(
+                      child: XcTaskButton(
+                        label: '发送回复',
+                        loadingLabel: '正在发送',
+                        glyph: AppGlyphs.send,
+                        action: () async {
+                          if (_reply.text.trim().isEmpty) {
+                            xcMessage(context, '请填写回复内容');
+                            return;
+                          }
+                          await widget.api.replyTicket(
+                            widget.id,
+                            _reply.text.trim(),
+                          );
+                          if (!mounted) return;
+                          _reply.clear();
+                          await refresh();
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ],
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.only(top: XcSpace.xs),
+              child: Text(
+                '工单已关闭。如果问题再次出现，可以提交新的工单。',
+                textAlign: TextAlign.center,
+                style: XcType.caption(context),
+              ),
             ),
         ]);
       },
     ),
   );
+}
+
+class _Bubble extends StatelessWidget {
+  const _Bubble({required this.mine, required this.text, required this.time});
+  final bool mine;
+  final String text;
+  final String time;
+  @override
+  Widget build(BuildContext context) {
+    final colors = XcColors.of(context);
+    const corner = Radius.circular(AppCorner.lg);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: XcSpace.sm),
+      child: Align(
+        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: FractionallySizedBox(
+            widthFactor: 0.86,
+            alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+            child: Column(
+              crossAxisAlignment: mine
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              spacing: 4,
+              children: [
+                Text(
+                  mine ? '我 · $time' : '客服 · $time',
+                  style: XcType.caption(context),
+                ),
+                DecoratedBox(
+                  decoration: ShapeDecoration(
+                    color: mine ? colors.accentSoft : colors.card,
+                    shape: RoundedSuperellipseBorder(
+                      borderRadius: BorderRadius.only(
+                        topLeft: mine ? corner : const Radius.circular(6),
+                        topRight: mine ? const Radius.circular(6) : corner,
+                        bottomLeft: corner,
+                        bottomRight: corner,
+                      ),
+                    ),
+                    shadows: mine ? null : XcShadow.card(colors),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    child: SelectableText(text, style: XcType.body(context)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -287,14 +287,21 @@ class ComponentDriver:
         if self.guest is not None:
             qa.require(lifecycle.guest_identity(self.device) == self.guest, 'component_guest_generation_changed')
 
+    def run_as(self, script, *, data=b'', timeout=45):
+        """Runs [script] as the app over the shell protocol.
+
+        exec-out neither forwards stdin nor returns the guest exit status, and
+        it mixes stderr into stdout; `shell -T` does all three without a pty.
+        """
+        return self.device.call('shell', '-T', 'run-as', PACKAGE, 'sh', '-c', shlex.quote(script), data=data, timeout=timeout)
+
     def read(self, name):
         qa.require(re.fullmatch(r'[A-Za-z0-9-]{1,80}\.json', name), 'component_receipt_name_required')
         self.verify()
         path = self.relative + '/' + name
         script = 'if [ ! -e ' + path + ' ]; then printf missing; elif [ -f ' + path + ' ] && [ ! -L ' + path + ' ] && [ "$(wc -c < ' + path + ')" -le 16384 ]; then cat ' + path + '; else exit 3; fi'
-        # Not exec-out: it drops the guest exit status and mixes in stderr.
         try:
-            raw = self.device.call('shell', 'run-as', PACKAGE, 'sh', '-c', shlex.quote(script))
+            raw = self.run_as(script)
         except qa.Refused as error:
             if error.exit_code is None:
                 raise
@@ -355,10 +362,32 @@ class ComponentDriver:
         self.verify()
         path = self.relative + '/' + name
         script = 'umask 077; test -d ' + self.relative + ' && test ! -L ' + self.relative + ' && test ! -e ' + path + ' && test ! -e ' + path + '.pending && cat > ' + path + '.pending && mv ' + path + '.pending ' + path
-        self.device.call('exec-out', 'run-as', PACKAGE, 'sh', '-c', shlex.quote(script), data=data, timeout=120)
+        diagnostic = {'step': name, 'bytes': len(data)}
+
+        def refuse(code, **fields):
+            self.report['control_failure'] = dict(diagnostic, **fields)
+            raise qa.Refused(code)
+
+        try:
+            self.run_as(script, data=data, timeout=120)
+        except qa.Refused as error:
+            if error.exit_code is None:
+                raise
+            refuse('component_guest_control_write_failed', adb_exit_code=error.exit_code)
         self.verify()
-        actual = self.device.call('exec-out', 'run-as', PACKAGE, 'sha256sum', path).decode('ascii').split()
-        qa.require(len(actual) == 2 and actual[0] == hashlib.sha256(data).hexdigest() and actual[1] == path, 'component_guest_control_hash_mismatch')
+        try:
+            raw = self.run_as('wc -c < ' + path + ' && sha256sum ' + path)
+        except qa.Refused as error:
+            if error.exit_code is None:
+                raise
+            refuse('component_guest_control_readback_failed', adb_exit_code=error.exit_code)
+        lines = raw.decode('ascii', errors='replace').splitlines() if len(raw) <= 1024 else []
+        size = lines[0].strip() if lines else ''
+        actual = lines[1].split() if len(lines) > 1 else []
+        guest_bytes = int(size) if size.isdigit() else None
+        matches = len(actual) == 2 and actual[0] == hashlib.sha256(data).hexdigest() and actual[1] == path
+        if guest_bytes != len(data) or not matches:
+            refuse('component_guest_control_hash_mismatch', adb_exit_code=0, readback_bytes=len(raw), guest_bytes=guest_bytes, guest_empty=guest_bytes == 0, digest_matches=matches)
 
     def arm(self, stage, action):
         name = ('lease-' if action == 'prepare' else 'arm-') + stage + '.json'

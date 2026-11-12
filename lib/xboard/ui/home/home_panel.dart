@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fl_clash/ui/context.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/ui/loading.dart';
 import 'package:fl_clash/ui/shape.dart';
@@ -111,7 +112,7 @@ class XcHomePanel extends StatelessWidget {
       );
       final account = data;
       final tips = account == null ? const <Widget>[] : _tips(context, clock);
-      final details = <Widget>[
+      final plan = <Widget>[
         if (account != null)
           _PlanCard(
             data: account,
@@ -138,6 +139,19 @@ class XcHomePanel extends StatelessWidget {
           )
         else
           const _PlanSkeleton(),
+      ];
+      final shortcuts = <Widget>[
+        if (account != null)
+          _Shortcuts(
+            pendingOrders: account.stats.firstOrNull ?? 0,
+            openTickets: account.stats.length > 1 ? account.stats[1] : 0,
+            onOrders: onOrders,
+            onTickets: onTickets,
+            onNotices: onNotices,
+            onCycle: onCycle,
+          ),
+      ];
+      final notice = <Widget>[
         if (account != null)
           _NoticeCard(notices: account.notices, onNotices: onNotices),
       ];
@@ -147,15 +161,26 @@ class XcHomePanel extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 spacing: XcSpace.xl,
                 children: [
-                  Expanded(flex: 5, child: _stack([hero, ...tips], start: 1)),
-                  Expanded(flex: 6, child: _stack(details, start: 2)),
+                  Expanded(
+                    flex: 5,
+                    child: _stack([hero, ...tips, ...notice], start: 1),
+                  ),
+                  Expanded(
+                    flex: 6,
+                    child: _stack([...plan, ...shortcuts], start: 2),
+                  ),
                 ],
               ),
             ]
-          : [hero, ...tips, ...details];
+          : [hero, ...tips, ...plan, ...shortcuts, ...notice];
       return SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(gutter, XcSpace.xs, gutter, XcSpace.xl),
+        padding: EdgeInsets.fromLTRB(
+          gutter,
+          XcSpace.xs,
+          gutter,
+          XcSpace.xl + context.bottomInset,
+        ),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: XcSpace.contentWidth),
@@ -998,4 +1023,120 @@ class _PlanSkeleton extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _Shortcuts extends StatelessWidget {
+  const _Shortcuts({
+    required this.pendingOrders,
+    required this.openTickets,
+    required this.onOrders,
+    required this.onTickets,
+    required this.onNotices,
+    required this.onCycle,
+  });
+
+  final int pendingOrders;
+  final int openTickets;
+  final VoidCallback onOrders;
+  final VoidCallback onTickets;
+  final VoidCallback onNotices;
+  final VoidCallback onCycle;
+
+  @override
+  Widget build(BuildContext context) => XcPanel(
+    elevated: true,
+    padding: const EdgeInsets.fromLTRB(
+      XcSpace.sm,
+      XcSpace.md,
+      XcSpace.sm,
+      XcSpace.sm,
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      spacing: XcSpace.xs,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: XcSpace.xs),
+          child: Text('常用服务', style: XcType.label(context)),
+        ),
+        Row(
+          children: [
+            _Shortcut(
+              glyph: AppGlyphs.requests,
+              label: '我的订单',
+              count: pendingOrders,
+              onTap: onOrders,
+            ),
+            _Shortcut(
+              glyph: AppGlyphs.compose,
+              label: '工单客服',
+              count: openTickets,
+              onTap: onTickets,
+            ),
+            _Shortcut(glyph: AppGlyphs.info, label: '站点公告', onTap: onNotices),
+            _Shortcut(
+              glyph: AppGlyphs.dataUsage,
+              label: '流量周期',
+              onTap: onCycle,
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+
+class _Shortcut extends StatelessWidget {
+  const _Shortcut({
+    required this.glyph,
+    required this.label,
+    required this.onTap,
+    this.count = 0,
+  });
+
+  final Glyph glyph;
+  final String label;
+  final VoidCallback onTap;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = XcColors.of(context);
+    return Expanded(
+      child: Semantics(
+        button: true,
+        label: count > 0 ? '$label，$count 项待处理' : label,
+        excludeSemantics: true,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            customBorder: XcRadius.tile,
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: XcSpace.sm),
+              child: Column(
+                spacing: XcSpace.xs,
+                children: [
+                  Badge(
+                    isLabelVisible: count > 0,
+                    label: Text('$count'),
+                    backgroundColor: colors.danger,
+                    child: XcGlyphWell(glyph: glyph, size: 44),
+                  ),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: XcType.caption(
+                      context,
+                    ).copyWith(color: colors.title),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

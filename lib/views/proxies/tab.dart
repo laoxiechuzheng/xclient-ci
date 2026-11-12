@@ -83,12 +83,16 @@ class ProxiesTabViewState extends ConsumerState<ProxiesTabView>
       return;
     }
     final cardType = ref.read(proxiesTabStateProvider).proxyCardType;
-    final rowOffset = selectedRowOffset(
-      proxies: group.all,
-      selectedProxyName: ref.read(selectedProxyNameProvider(group.name)),
-      columns: _columns,
-      rowExtent: getRowExtent(cardType),
-    );
+    final selectedName = ref.read(selectedProxyNameProvider(group.name));
+    final override = ProxiesViewOverride.maybeOf(context);
+    final rowOffset = override != null
+        ? override.selectedOffset(group, selectedName, _columns)
+        : selectedRowOffset(
+            proxies: group.all,
+            selectedProxyName: selectedName,
+            columns: _columns,
+            rowExtent: getRowExtent(cardType),
+          );
     if (rowOffset == null) {
       return;
     }
@@ -252,6 +256,9 @@ class ProxyGroupView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (ProxiesViewOverride.maybeOf(context) case final override?) {
+      return override.groupBody(group, controller, columns, cardType);
+    }
     final proxies = group.all;
     return CommonScrollBar(
       controller: controller,

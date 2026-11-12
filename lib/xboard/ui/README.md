@@ -27,5 +27,8 @@ Set `XC_UI_SCREENSHOTS` to a local directory to retain the rendering evidence.
 Tests render fake data without starting the network core or system proxy.
 
 Visual conventions, tokens, components and motion rules are in `DESIGN-SYSTEM.md`.
-`test/xboard/ui/visual_test.dart` renders every core screen at four sizes in light
-and dark themes; with `XC_UI_SCREENSHOTS` set it also writes the screenshots.
+`test/xboard/ui/visual_test.dart` (login, home, nodes) and `visual_phase2_test.dart`
+(store, orders, account, tickets, gift cards, invites, updates, startup and exit)
+render each screen and state in light and dark themes at phone and desktop sizes,
+and the key screens also at the small and wide sizes; with `XC_UI_SCREENSHOTS` set
+they also write the screenshots.
