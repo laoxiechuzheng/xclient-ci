@@ -73,7 +73,30 @@ def vm_snapshot(response, pid, *, allow_empty=False):
         item = mains[0]
         require(isinstance(item.get('number'), str) and item['number'].isdigit() and isinstance(item.get('isolateGroupId'), str) and re.fullmatch(r'isolateGroups/[A-Za-z0-9_-]{1,128}', item['isolateGroupId']) is not None, 'main_isolate_identity_unconfirmed')
         main = {key: item[key] for key in ('id', 'number', 'isolateGroupId')}
-    return {'pid': pid, 'vm_start': result['startTime'], 'main': main, 'isolate_ids': [item['id'] for item in isolates]}
+    return {
+        'pid': pid, 'vm_start': result['startTime'], 'main': main, 'isolate_ids': [item['id'] for item in isolates],
+        'isolate_count': len(isolates),
+        'non_system_isolate_count': sum(item.get('isSystemIsolate') is False for item in isolates),
+        'system_flag_missing_count': sum('isSystemIsolate' not in item for item in isolates),
+        'main_named_count': sum(item['name'] == 'main' for item in isolates),
+    }
+
+
+VALIDATION_HINTS = ('请输入邮箱', '请输入密码')
+
+
+def main_change(original, observed):
+    """Which identity part moved, and the shape of both isolate lists; no ids."""
+    before, after = original['main'] or {}, observed['main'] or {}
+    counts = ('isolate_count', 'non_system_isolate_count', 'system_flag_missing_count', 'main_named_count')
+    return {
+        'vm_start_changed': observed['vm_start'] != original['vm_start'],
+        'main_id_changed': after.get('id') != before.get('id'),
+        'main_number_changed': after.get('number') != before.get('number'),
+        'main_group_changed': after.get('isolateGroupId') != before.get('isolateGroupId'),
+        'original': {key: original.get(key) for key in counts},
+        'observed': {key: observed.get(key) for key in counts},
+    }
 
 
 def activity_events(data, pid):
@@ -202,6 +225,19 @@ class LifecycleProbe:
     def record(self):
         return self.device.call('shell', 'dumpsys', 'activity', 'activities')
 
+    def validation_hint_visible(self):
+        try:
+            nodes = self.device.ui().iter('node')
+            return any((node.get('text') or node.get('content-desc') or '').strip() in VALIDATION_HINTS for node in nodes)
+        except Exception:
+            return None
+
+    def require_same_main(self, original, observed, *, index, observation, launched):
+        if observed['vm_start'] == original['vm_start'] and observed['main'] == original['main']:
+            return
+        self.report['main_change'] = dict(main_change(original, observed), replacement=index, observation=observation, ms_since_launch=int((time.monotonic() - launched) * 1000), validation_hint_visible=self.validation_hint_visible())
+        raise ProofRefused('main_isolate_changed_during_replacement')
+
     def connect(self):
         self.same_guest()
         # Consent/input can outlive the recent 300-line window. Filter the
@@ -223,6 +259,7 @@ class LifecycleProbe:
         before = self.events()
         old = current_activity(before)
         old_record = resumed_record(self.record(), package=self.package)
+        launched = time.monotonic()
         result = self.device.call('shell', 'am', 'start', '-W', '-f', '0x10008000', '-n', self.package + '/' + ACTIVITY)
         require('Status: ok' in private_text(result), 'activity_replacement_launch_unconfirmed')
         deadline = time.monotonic() + 35
@@ -230,8 +267,8 @@ class LifecycleProbe:
         while time.monotonic() < deadline:
             self.same_guest()
             observed = self.channel.read(self.guest['pid'])
-            require(observed['vm_start'] == original['vm_start'] and observed['main'] == original['main'], 'main_isolate_changed_during_replacement')
             observations += 1
+            self.require_same_main(original, observed, index=index, observation=observations, launched=launched)
             after = self.events()
             changes = events_after(before, after)
             destroyed = any(item['tag'] == 'destroy' and item['token'] == old and item['reason'] == 'performDestroy' for item in changes)
@@ -248,7 +285,7 @@ class LifecycleProbe:
                     self.report['captures']['replacement_' + str(index)] = self.device.capture('0' + str(4 + index) + '-activity-replaced')
                     self.same_guest()
                     final = self.channel.read(self.guest['pid'])
-                    require(final['vm_start'] == original['vm_start'] and final['main'] == original['main'], 'main_isolate_changed_during_replacement')
+                    self.require_same_main(original, final, index=index, observation=observations + 1, launched=launched)
                     self.report['replacements'].append({'client_destroy_callback_returned': True, 'different_client_activity': True, 'different_server_record': True, 'same_guest_birth': True, 'same_vm_instance': True, 'same_main_isolate': True, 'main_observations': observations + 1, 'old_activity_sha256': hash_identity(old), 'new_activity_sha256': hash_identity(current), 'main_identity_sha256': hash_identity(original['main'])})
                     return
             time.sleep(0.3)

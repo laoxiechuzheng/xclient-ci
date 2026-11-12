@@ -189,6 +189,50 @@ class OrchestrationTest(unittest.TestCase):
             self.test.replace(1, self.original)
         self.assertEqual(self.test.report['replacements'], [])
 
+    def test_a_changed_main_records_which_part_moved_without_any_identifier(self):
+        self.test.events = Mock(return_value=self.before)
+        self.test.record = Mock(return_value=b'mResumedActivity: ActivityRecord{aa22 u0 com.xclient.example.dev/com.follow.clash.MainActivity t5}')
+        self.device.call.return_value = b'Status: ok\n'
+        self.device.ui.return_value = ET.fromstring('<hierarchy><node text="请输入邮箱" /><node text="登录" /></hierarchy>')
+        changed = vm('isolates/99')
+        changed['result']['isolates'].append({'type': '@Isolate', 'id': 'isolates/7', 'name': 'vm-service', 'isSystemIsolate': True})
+        self.test.channel.read.return_value = probe.vm_snapshot(changed, 321)
+        with self.assertRaisesRegex(probe.ProofRefused, '^main_isolate_changed_during_replacement$'):
+            self.test.replace(1, self.original)
+        change = self.test.report['main_change']
+        self.assertGreaterEqual(change.pop('ms_since_launch'), 0)
+        self.assertEqual(change, {
+            'vm_start_changed': False, 'main_id_changed': True, 'main_number_changed': False, 'main_group_changed': False,
+            'original': {'isolate_count': 1, 'non_system_isolate_count': 1, 'system_flag_missing_count': 0, 'main_named_count': 1},
+            'observed': {'isolate_count': 2, 'non_system_isolate_count': 1, 'system_flag_missing_count': 0, 'main_named_count': 1},
+            'replacement': 1, 'observation': 1, 'validation_hint_visible': True,
+        })
+        self.assertNotIn('isolates/', json.dumps(self.test.report))
+        self.assertNotIn('isolateGroups/', json.dumps(self.test.report))
+
+    def test_a_main_change_seen_only_after_the_replacement_names_that_observation(self):
+        after = self.reopened
+        self.test.events = Mock(side_effect=[self.before, after, after])
+        self.test.record = Mock(side_effect=[b'mResumedActivity: ActivityRecord{aa22 u0 com.xclient.example.dev/com.follow.clash.MainActivity t5}', b'mResumedActivity: ActivityRecord{bb33 u0 com.xclient.example.dev/com.follow.clash.MainActivity t6}'])
+        self.device.call.return_value = b'Status: ok\n'
+        self.device.ui.side_effect = probe.ProofRefused('ui_unavailable')
+        self.test.channel.read.side_effect = [self.original, probe.vm_snapshot(vm(start=456), 321)]
+        with patch.object(probe.time, 'sleep'), self.assertRaisesRegex(probe.ProofRefused, '^main_isolate_changed_during_replacement$'):
+            self.test.replace(2, self.original)
+        change = self.test.report['main_change']
+        self.assertEqual({key: change[key] for key in ('vm_start_changed', 'main_id_changed', 'replacement', 'observation', 'validation_hint_visible')}, {'vm_start_changed': True, 'main_id_changed': False, 'replacement': 2, 'observation': 2, 'validation_hint_visible': None})
+        self.assertEqual(self.test.report['replacements'], [])
+
+    def test_isolate_counts_show_a_main_named_isolate_the_filter_skipped(self):
+        response = vm()
+        response['result']['isolates'] += [
+            {'type': '@Isolate', 'id': 'isolates/5', 'name': 'main', 'number': '5', 'isolateGroupId': 'isolateGroups/6'},
+            {'type': '@Isolate', 'id': 'isolates/7', 'name': 'vm-service', 'isSystemIsolate': True},
+        ]
+        snapshot = probe.vm_snapshot(response, 321)
+        self.assertEqual(snapshot['main']['id'], 'isolates/1')
+        self.assertEqual({key: snapshot[key] for key in ('isolate_count', 'non_system_isolate_count', 'system_flag_missing_count', 'main_named_count')}, {'isolate_count': 3, 'non_system_isolate_count': 1, 'system_flag_missing_count': 1, 'main_named_count': 2})
+
     def quit_fixture(self, reopened):
         self.test.events = Mock(side_effect=[self.before, self.destroyed, self.destroyed, self.reopened])
         self.test.record = Mock(return_value=b'mResumedActivity: ActivityRecord{cc44 u0 com.android.launcher/.Launcher t1}')
