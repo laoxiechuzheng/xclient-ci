@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="xclient_verification_channel">Connection verification</string>
+    <string name="xclient_verify_before_connect">Open the app to verify your account and updates before connecting.</string>
+    <string name="xclient_exiting">Disconnecting and closing…</string>
+    <string name="xclient_update_channel">Client updates</string>
+    <string name="xclient_update_permission">Open the app to allow installation of the verified update.</string>
+    <string name="xclient_update_retry">The update needs your attention. Open the app to continue.</string>
+    <string name="xclient_update_required">A required update is being prepared. Tap to view progress.</string>
+    <string name="xclient_update_available">A new client version is available. Tap to view the update.</string>
+</resources>

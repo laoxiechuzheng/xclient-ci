@@ -1,0 +1,32 @@
+# XClient-Mihomo-Base: c5062921054902b25215a6a933e72ccd714c9bfa
+
+diff --git a/adapter/adapter.go b/adapter/adapter.go
+index 9cd4fa01..87bbdaf9 100644
+--- a/adapter/adapter.go
++++ b/adapter/adapter.go
+@@ -164,6 +164,11 @@ func (p *Proxy) MarshalJSON() ([]byte, error) {
+ // URLTest get the delay for the specified URL
+ // implements C.Proxy
+ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (t uint16, err error) {
++	if BeforeURLTestHook != nil {
++		if err = BeforeURLTestHook(ctx, url, p.Name()); err != nil {
++			return
++		}
++	}
+ 	var satisfied bool
+ 
+ 	defer func() {
+diff --git a/adapter/patch.go b/adapter/patch.go
+index f946f31a..970c7256 100644
+--- a/adapter/patch.go
++++ b/adapter/patch.go
+@@ -1,5 +1,9 @@
+ package adapter
+ 
++import "context"
++
++var BeforeURLTestHook func(ctx context.Context, url, name string) error
++
+ // timedOut follows hub/route's getProxyDelay, which answers 504 rather than 503
+ // once the test's context is done.
+ type UrlTestCheck func(url string, name string, delay uint16, timedOut bool)

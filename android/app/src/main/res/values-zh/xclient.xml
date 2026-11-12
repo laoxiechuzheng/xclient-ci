@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="xclient_verification_channel">连接验证</string>
+    <string name="xclient_verify_before_connect">请打开应用，核验账户和更新状态后再连接。</string>
+    <string name="xclient_exiting">正在断开连接并退出…</string>
+    <string name="xclient_update_channel">客户端更新</string>
+    <string name="xclient_update_permission">请打开应用，允许安装已核验的新版本。</string>
+    <string name="xclient_update_retry">更新需要处理，请打开应用继续。</string>
+    <string name="xclient_update_required">正在准备必要更新，点击查看进度。</string>
+    <string name="xclient_update_available">客户端有新版本，点击查看更新。</string>
+</resources>

@@ -1,0 +1,42 @@
+{
+  "_comment": "Public demo brand. Real brands live in the private xclient-brands repository; see tool/xclient/README.md. The keys below are throwaway demo keys whose seeds were discarded.",
+  "schema": 1,
+  "brand_id": "example",
+  "display_name": "Example 加速器",
+  "ua_product": "exampleClient",
+  "app_id_android": "com.xclient.example",
+  "bundle_id_macos": "com.xclient.example",
+  "windows_app_name": "ExampleClient",
+  "windows_app_guid": "F80D284D-D28E-4BE5-902D-97972AB748C7",
+  "windows_company": "com.xclient",
+  "publisher": "XClient",
+  "publisher_url": "https://www.example.com",
+  "url_scheme": "xcexample",
+  "builtin_api_endpoints": [
+    {"url": "https://api.example.com", "weight": 100},
+    {"url": "https://api2.example.net", "weight": 50}
+  ],
+  "bootstrap_sources": [
+    "https://cdn.example.com/xclient/boot-example.json",
+    "https://example.github.io/xclient/boot-example.json"
+  ],
+  "doh_names": ["example.com"],
+  "ctrl_pub_keys": {
+    "ctrl-1": "Ha1GrxnY20Ptq0cigMKDViPMPh-PUX9IS7fufLUPi30",
+    "ctrl-2": "aC52eIcXLy7rv1qV4PbwX5CMjwFd2BiAT_gZ5C8INaQ"
+  },
+  "rel_pub_keys": {
+    "rel-1": "WsesMPLpTn0jw_t4FkYXL_4K75jfYHhNWTtSmq22Cf8",
+    "rel-2": "0wYsiLh1XmtuPmuqFxGqEOCVHqg6w8P6SvC7tTjD4ZM"
+  },
+  "env_pub_keys": {
+    "env-1": "_ebI1XCNtXpXhiiR8m9oN-aGvzPyRx7PJ_YHrVnYJ1g"
+  },
+  "obf_key": "MJOE4us23WRs18soUCcvgiGrO3OTKs81PuvVAXis-mA",
+  "panel_web_url": "https://www.example.com",
+  "support_url": "https://www.example.com/#/ticket",
+  "release_url_bases": [
+    "https://downloads.example.com/xclient/{tag}"
+  ],
+  "icons_dir": "overlay"
+}

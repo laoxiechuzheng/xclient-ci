@@ -1,0 +1,545 @@
+name: xclient-native-qa
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Native update, macOS TLS diagnosis or SAFE Android emulator
+        type: choice
+        options: [update, tls, android, android-update, keychain-confirmation]
+        default: update
+      platform:
+        description: Native platform to verify
+        type: choice
+        options: [all, windows, macos]
+        default: all
+      macos_signing:
+        description: Mac QA signing control (disposable test identity only)
+        type: choice
+        options: [adhoc, ephemeral-self-signed]
+        default: adhoc
+      macos_confirmation:
+        description: C38 confirmation for the owned disposable data Keychain only
+        type: choice
+        options: [disabled, confirm-owned]
+        default: disabled
+      android_build_mode:
+        description: Normal-main runtime comparison (installer component uses Profile)
+        type: choice
+        options: [debug, profile]
+        default: debug
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.platform || 'all' }}-${{ inputs.mode || 'update' }}-${{ inputs.macos_signing || 'adhoc' }}-${{ inputs.macos_confirmation || 'disabled' }}-${{ inputs.android_build_mode || 'debug' }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: '3.47.6'
+  GO_VERSION: '1.27.1'
+  CA_BUNDLE: cacert-2026-09-25.pem
+  CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+
+jobs:
+  macos-confirmation-preflight:
+    name: Read existing Mac Accessibility permission (no credentials)
+    if: inputs.mode == 'keychain-confirmation'
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout reviewed permission probe
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify no-prompt permission and credential refusal guards
+        run: python3 tool/xclient/ci/macos_keychain_confirmation_test.py -v
+
+      - name: Observe existing Accessibility permission only
+        run: python3 tool/xclient/ci/macos_keychain_confirmation.py --output "$GITHUB_WORKSPACE/out/macos-confirmation-preflight"
+
+      - name: Upload finite permission receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-confirmation-preflight
+          path: out/macos-confirmation-preflight/preflight.json
+          if-no-files-found: error
+          retention-days: 3
+
+  desktop-update:
+    name: Real ${{ matrix.platform }} installation and update (SAFE example)
+    if: inputs.mode == 'update'
+    runs-on: ${{ matrix.platform == 'windows' && 'windows-2022' || 'macos-15' }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.platform == 'windows' && '["windows"]' || inputs.platform == 'macos' && '["macos"]' || '["windows","macos"]') }}
+    env:
+      QA_PYTHON: ${{ matrix.platform == 'windows' && 'python' || 'python3' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Checkout the pinned core
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Xcode
+        if: matrix.platform == 'macos'
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app || sudo xcode-select -s /Applications/Xcode_26.2.app
+          xcodebuild -version
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Fetch pinned native CA certificates
+        run: |
+          set -euo pipefail
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          if command -v sha256sum >/dev/null; then
+            echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+          else
+            echo "$CA_BUNDLE_SHA256  $bundle" | shasum -a 256 -c -
+          fi
+
+      - name: Test updater QA failure guards
+        run: |
+          "$QA_PYTHON" -m unittest discover -s tool/xclient/ci/tests -p test_native_store_smoke.py -v
+          "$QA_PYTHON" tool/xclient/ci/native_update_smoke_test.py -v
+          "$QA_PYTHON" tool/xclient/ci/macos_signing_fixture_test.py -v
+          "$QA_PYTHON" tool/xclient/ci/macos_data_keychain_test.py -v
+          "$QA_PYTHON" tool/xclient/ci/macos_keychain_ax_test.py -v
+          "$QA_PYTHON" tool/xclient/ci/macos_keychain_confirmation_test.py -v
+
+      - name: Prepare private synthetic update fixture
+        id: native_update_prepare
+        env:
+          QA_MACOS_SIGNING: ${{ inputs.macos_signing || 'adhoc' }}
+          QA_MACOS_CONFIRMATION: ${{ inputs.macos_confirmation || 'disabled' }}
+          QA_PLATFORM: ${{ inputs.platform || 'all' }}
+        run: |
+          set -euo pipefail
+          command -v openssl
+          if [ "$QA_MACOS_CONFIRMATION" != disabled ]; then
+            test "$QA_PLATFORM" = macos
+          fi
+          signing_args=()
+          if [ '${{ matrix.platform }}' = macos ]; then
+            signing_args=(--macos-signing "$QA_MACOS_SIGNING" --macos-confirmation "$QA_MACOS_CONFIRMATION")
+          fi
+          "$QA_PYTHON" tool/xclient/ci/native_update_smoke.py prepare --platform '${{ matrix.platform }}' \
+            --output "$GITHUB_WORKSPACE/out/native-update-${{ matrix.platform }}" "${signing_args[@]}"
+
+      - name: Preflight the disposable Mac signing identity
+        if: matrix.platform == 'macos' && inputs.macos_signing == 'ephemeral-self-signed'
+        run: |
+          "$QA_PYTHON" tool/xclient/ci/native_update_smoke.py signing-preflight --platform macos \
+            --state out/native-update-macos/private/state.json
+
+      - name: Build and stage two real SAFE Windows installers
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dart pub global activate -s git https://github.com/chen08209/flutter_distributor.git --git-ref v0.6.11-flclash.4 --git-path packages/flutter_distributor
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned distributor activation failed' }
+          $pubCache = if ($env:PUB_CACHE) { $env:PUB_CACHE } else { Join-Path $env:LOCALAPPDATA 'Pub\Cache' }
+          $distributor = Join-Path $pubCache 'bin\flutter_distributor.bat'
+          if (-not (Test-Path -LiteralPath $distributor -PathType Leaf)) { throw 'Pinned distributor entrypoint missing' }
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\')
+          $output = Join-Path $workspace 'out\native-update-windows'
+          $state = Join-Path $output 'private\state.json'
+          foreach ($stage in @('1', '2')) {
+            python tool/xclient/ci/native_update_smoke.py brand --platform windows --state $state --stage $stage
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic brand preparation failed' }
+            & $distributor package --skip-clean --platform windows --targets exe --description amd64 --build-target=test/xboard/native/update_app.dart "--flutter-build-args=dart-define-from-file=$output/private/v$stage-defines.json"
+            if ($LASTEXITCODE -ne 0) { throw 'Real SAFE Inno build failed' }
+            $packages = @(Get-ChildItem -LiteralPath dist -Recurse -File -Filter '*.exe')
+            if ($packages.Count -ne 1) { throw 'Expected one new Inno package' }
+            python tool/xclient/ci/native_update_smoke.py stage --platform windows --state $state --stage $stage --bundle build/windows/x64/runner/Release --package $packages[0].FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Windows package provenance check failed' }
+            $sourceItem = Get-Item -LiteralPath dist
+            if (-not $sourceItem.PSIsContainer -or ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Stage source must be a real workspace directory' }
+            $source = (Resolve-Path -LiteralPath dist).ProviderPath
+            $target = [IO.Path]::GetFullPath((Join-Path $output "private\dist-v$stage"))
+            if ($source -ne (Join-Path $workspace 'dist') -or -not $target.StartsWith(($output + '\private\'), [StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $target)) { throw 'Stage move escaped the owned workspace' }
+            Move-Item -LiteralPath $source -Destination $target
+          }
+
+      - name: Build and stage two real SAFE macOS bundles
+        if: matrix.platform == 'macos'
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/out/native-update-macos"
+          state="$out/private/state.json"
+          plutil -replace FLTEnableImpeller -bool NO macos/Runner/Info.plist
+          for stage in 1 2; do
+            "$QA_PYTHON" tool/xclient/ci/native_update_smoke.py brand --platform macos --state "$state" --stage "$stage"
+            flutter build macos --release --target=test/xboard/native/update_app.dart \
+              --dart-define-from-file="$out/private/v$stage-defines.json"
+            shopt -s nullglob
+            apps=(build/macos/Build/Products/Release/*.app)
+            test "${#apps[@]}" -eq 1
+            "$QA_PYTHON" tool/xclient/ci/native_update_smoke.py stage --platform macos --state "$state" --stage "$stage" --bundle "${apps[0]}"
+          done
+
+      - name: Exercise the production update handoff
+        run: |
+          "$QA_PYTHON" tool/xclient/ci/native_update_smoke.py run --platform '${{ matrix.platform }}' \
+            --state "out/native-update-${{ matrix.platform }}/private/state.json"
+
+      - name: Restore and remove the owned disposable data Keychain
+        if: always() && matrix.platform == 'macos' && inputs.macos_confirmation == 'confirm-owned' && steps.native_update_prepare.outcome == 'success'
+        run: |
+          "$QA_PYTHON" tool/xclient/ci/native_update_smoke.py confirmation-cleanup --platform macos \
+            --state out/native-update-macos/private/state.json
+
+      - name: Remove the owned disposable signing resources
+        if: always() && matrix.platform == 'macos' && inputs.macos_signing == 'ephemeral-self-signed' && steps.native_update_prepare.outcome == 'success'
+        run: |
+          "$QA_PYTHON" tool/xclient/ci/native_update_smoke.py signing-cleanup --platform macos \
+            --state out/native-update-macos/private/state.json
+
+      - name: Upload safe receipts only
+        if: always() && steps.native_update_prepare.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: example-native-update-${{ matrix.platform }}
+          path: out/native-update-${{ matrix.platform }}/receipts/
+          if-no-files-found: error
+          retention-days: 3
+
+  tls-context:
+    name: macOS SDK TLS context diagnosis (no installation)
+    if: inputs.mode == 'tls'
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout reviewed probe source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Test native trust diagnostic failure and cleanup guards
+        run: python3 tool/xclient/ci/native_tls_probe_test.py -v
+
+      - name: Test strict process ownership diagnostic guards
+        run: |
+          mkdir -p .dart_tool
+          python3 tool/xclient/ci/native_update_smoke_test.py -v
+
+      - name: Observe an owned child before and after natural exit
+        run: |
+          python3 tool/xclient/ci/native_update_smoke.py process-probe --platform macos \
+            --output "$GITHUB_WORKSPACE/out/native-process-macos"
+
+      - name: Upload finite process lifecycle receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-process-lifetime-probe
+          path: out/native-process-macos/receipts/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Setup the same Flutter and Dart SDK
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Fetch the identical pinned CA bundle
+        run: |
+          set -euo pipefail
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          mkdir -p "$(dirname "$bundle")"
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | shasum -a 256 -c -
+
+      - name: Compare strict TLS contexts with the original fixture certificate
+        run: |
+          python3 tool/xclient/ci/native_tls_probe.py \
+            --output "$GITHUB_WORKSPACE/out/native-tls-macos" \
+            --mozilla-ca core/Clash.Meta/component/ca/ca-certificates.crt \
+            --mozilla-sha256 "$CA_BUNDLE_SHA256"
+
+      - name: Upload finite TLS receipts only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-sdk-tls-context
+          path: out/native-tls-macos/receipts/
+          if-no-files-found: error
+          retention-days: 3
+
+  android-apk:
+    name: Build and export real SAFE x86_64 APK
+    if: inputs.mode == 'android' || inputs.mode == 'android-update'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      artifact_id: ${{ steps.android_apk_upload.outputs.artifact-id }}
+    env:
+      NDK_VERSION: r28c
+      XCLIENT_ANDROID_QA: official-safe-x86_64-v1
+      QA_ANDROID_BUILD_MODE: ${{ inputs.mode == 'android-update' && 'profile' || inputs.android_build_mode || 'debug' }}
+      XCLIENT_ANDROID_QA_PURPOSE: ${{ inputs.mode == 'android-update' && 'update-component' || 'lifecycle' }}
+      QA_ANDROID_DRIVER: ${{ inputs.mode == 'android-update' && 'android_update_component' || 'android_emulator_smoke' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify disposable producer scope
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, 'tool/xclient/ci')
+          import android_emulator_smoke as qa
+          qa.ci_identity()
+          qa.qa_purpose()
+          qa.require(os.environ['GITHUB_JOB'] == qa.PRODUCER_JOB, 'artifact_producer_required')
+          PY
+
+      - name: Prepare Android build runner disk
+        run: |
+          set -euo pipefail
+          df -h /
+          for directory in /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc; do
+            if [ -d "$directory" ]; then sudo du -sh "$directory"; fi
+          done
+          sudo rm -rf -- /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc
+          df -h /
+
+      - name: Checkout the pinned core
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Setup NDK
+        id: ndk
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+          link-to-sdk: true
+
+      - name: Verify and share Android NDK
+        env:
+          XCLIENT_NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          ndk_revision="$(sed -n 's/^Pkg.Revision[[:space:]]*=[[:space:]]*//p' "$XCLIENT_NDK_PATH/source.properties" | tr -d '\r')"
+          required_revision="$(sed -n 's/^ndkVersion[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' android/gradle/libs.versions.toml)"
+          test -n "$required_revision"
+          test "$ndk_revision" = "$required_revision"
+          test "$(realpath "${ANDROID_HOME:?}/ndk/$required_revision")" = "$(realpath "$XCLIENT_NDK_PATH")"
+          for variable in ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_NDK_PATH ANDROID_NDK ANDROID_NDK_LATEST_HOME; do
+            printf '%s=%s\n' "$variable" "$XCLIENT_NDK_PATH" >> "$GITHUB_ENV"
+          done
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Fetch checksum-pinned native CA certificates
+        run: |
+          set -euo pipefail
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+
+      - name: Apply the example brand
+        run: dart tool/xclient/brand_apply.dart example --version 1.0.0-pre.1
+
+      - name: Test emulator ownership and transfer guards
+        run: |
+          python3 tool/xclient/ci/android_emulator_smoke_test.py -v
+          python3 tool/xclient/ci/android_lifecycle_probe_test.py -v
+          python3 tool/xclient/ci/android_startup_probe_test.py -v
+          python3 tool/xclient/ci/android_update_component_test.py -v
+
+      - name: Prepare owned SAFE producer state
+        id: android_prepare
+        run: python3 tool/xclient/ci/android_emulator_smoke.py prepare --purpose "$XCLIENT_ANDROID_QA_PURPOSE" --build-mode "$QA_ANDROID_BUILD_MODE" --output "$GITHUB_WORKSPACE/out/android-emulator"
+
+      - name: Build actual SAFE x86_64 APK
+        env:
+          XCLIENT_BRAND: example
+        run: python3 "tool/xclient/ci/${QA_ANDROID_DRIVER}.py" build --state "$GITHUB_WORKSPACE/out/android-emulator/private/state.json"
+
+      - name: Record build disk usage and export the allowlist
+        run: |
+          set -euo pipefail
+          df -h /
+          du -sh build .dart_tool out/android-emulator/private
+          python3 "tool/xclient/ci/${QA_ANDROID_DRIVER}.py" export --state "$GITHUB_WORKSPACE/out/android-emulator/private/state.json"
+
+      - name: Upload only the SAFE APK and finite producer receipt
+        id: android_apk_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-safe-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out/android-emulator/export/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload finite producer diagnostics even if validation fails
+        if: always() && steps.android_prepare.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-safe-build-receipts
+          path: out/android-emulator/receipts/
+          if-no-files-found: warn
+          retention-days: 3
+
+  android-emulator:
+    name: Install and render on fresh API35 emulator
+    if: inputs.mode == 'android' || inputs.mode == 'android-update'
+    needs: android-apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      XCLIENT_ANDROID_QA: official-safe-x86_64-v1
+      XCLIENT_ANDROID_APK_ARTIFACT_ID: ${{ needs.android-apk.outputs.artifact_id }}
+      QA_ANDROID_BUILD_MODE: ${{ inputs.mode == 'android-update' && 'profile' || inputs.android_build_mode || 'debug' }}
+      XCLIENT_ANDROID_QA_PURPOSE: ${{ inputs.mode == 'android-update' && 'update-component' || 'lifecycle' }}
+      QA_ANDROID_DRIVER: ${{ inputs.mode == 'android-update' && 'android_update_component' || 'android_emulator_smoke' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout the same reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify disposable consumer scope
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, 'tool/xclient/ci')
+          import android_emulator_smoke as qa
+          qa.ci_identity()
+          qa.qa_purpose()
+          qa.require(os.environ['GITHUB_JOB'] == qa.CONSUMER_JOB, 'artifact_consumer_required')
+          qa.artifact_id()
+          PY
+          df -h /
+
+      - name: Prepare fresh emulator runner disk
+        run: |
+          set -euo pipefail
+          df -h /
+          for directory in /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc; do
+            if [ -d "$directory" ]; then sudo du -sh "$directory"; fi
+          done
+          sudo rm -rf -- /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc
+          df -h /
+
+      - name: Checkout the same pinned core for brand metadata
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Flutter for metadata only
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Resolve locked metadata dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Reproduce example metadata without scheduling native hooks
+        run: dart --disable-dart-dev tool/xclient/brand_apply.dart example --version 1.0.0-pre.1
+
+      - name: Test refusal and cross-job transfer guards
+        run: |
+          python3 tool/xclient/ci/android_emulator_smoke_test.py -v
+          python3 tool/xclient/ci/android_lifecycle_probe_test.py -v
+          python3 tool/xclient/ci/android_startup_probe_test.py -v
+          python3 tool/xclient/ci/android_update_component_test.py -v
+
+      - name: Prepare a new consumer nonce and state
+        run: python3 tool/xclient/ci/android_emulator_smoke.py prepare --purpose "$XCLIENT_ANDROID_QA_PURPOSE" --build-mode "$QA_ANDROID_BUILD_MODE" --output "$GITHUB_WORKSPACE/out/android-emulator"
+
+      - name: Download exactly the dependent producer artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.android-apk.outputs.artifact_id }}
+          path: out/android-emulator/incoming
+          merge-multiple: true
+
+      - name: Import and verify same-run producer provenance
+        run: python3 "tool/xclient/ci/${QA_ANDROID_DRIVER}.py" import --state "$GITHUB_WORKSPACE/out/android-emulator/private/state.json"
+
+      - name: Install official emulator and the one approved image
+        run: |
+          set -euo pipefail
+          df -h /
+          du -sh .dart_tool out/android-emulator
+          python3 tool/xclient/ci/android_emulator_smoke.py install-tools --state "$GITHUB_WORKSPACE/out/android-emulator/private/state.json"
+          df -h /
+
+      - name: Enable the disposable runner KVM device
+        run: |
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+
+      - name: Install, launch and capture the owned official emulator
+        run: python3 tool/xclient/ci/android_emulator_smoke.py run --state "$GITHUB_WORKSPACE/out/android-emulator/private/state.json"
+
+      - name: Upload only finite receipts and native captures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ inputs.mode == 'android-update' && 'android-api35-native-update' || 'android-api35-safe-smoke' }}
+          path: out/android-emulator/receipts/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,575 @@
+name: xclient-build
+
+# Checks every push and pull request to main: analysis, the XClient tests, the
+# upstream test suite, the PHP interop vectors, and safe builds of the example
+# example brand. Release builds live in xclient-release.yaml.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.47.6'
+  GO_VERSION: '1.27.1'
+  NDK_VERSION: r28c
+  # Same pinned bundle as upstream build.yaml; the core embeds it and
+  # pubspec.yaml lists it as an asset.
+  CA_BUNDLE: cacert-2026-09-25.pem
+  CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+
+jobs:
+  checks:
+    name: Analyze and XClient tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Fetch CA certificates
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          mkdir -p "$(dirname "$bundle")"
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Skip native build hooks for Dart-only checks
+        run: yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
+
+      - name: Check format of XClient code
+        run: |
+          dirs=(tool/xclient test/xboard)
+          if [ -d lib/xboard ]; then dirs+=(lib/xboard); fi
+          dart format --output=none --set-exit-if-changed "${dirs[@]}" setup.dart
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Validate the example brand
+        run: dart tool/xclient/brand_apply.dart example --check
+
+      - name: Run XClient tests
+        run: flutter test test/xboard --reporter expanded
+
+      - name: Check branded connection and probe actions
+        run: |
+          flutter test --dart-define=XC_BRAND_ID=example \
+            --dart-define=XC_VERSION_NAME=1.0.0-pre.1 --dart-define=XC_BUILD_NUMBER=10000401 \
+            test/xboard/probe test/xboard/connection_gate_test.dart \
+            test/xboard/policy_live_gate_test.dart \
+            test/xboard/policy_admission_widget_test.dart \
+            test/xboard/core/client_identity_test.dart --reporter expanded
+
+      - name: Check internal recovery logs with user error and silent filters
+        run: |
+          flutter test --dart-define=XC_BRAND_ID=example \
+            test/manager/core_manager_test.dart \
+            --plain-name 'branded error and silent hide internal failure logs while runtime still confirms' \
+            --reporter expanded
+
+  upstream-tests:
+    name: Upstream test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Checkout submodules for core contract tests
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Fetch CA certificates
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          mkdir -p "$(dirname "$bundle")"
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Skip the Go core build hook
+        run: yq -i '.hooks.user_defines.setup.build_assets = false' pubspec.yaml
+
+      # Keeps the seams into upstream files honest; see tool/xclient/README.md.
+      - name: Run all tests
+        run: dart run tool/test.dart -- --reporter expanded
+
+  php-vectors:
+    name: PHP interop vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.2'
+          extensions: sodium
+          coverage: none
+
+      # Every test/xboard/vectors/*_test.php exits non-zero when the vectors
+      # it regenerates or checks disagree with the committed JSON.
+      - name: Run PHP vector checks
+        run: |
+          shopt -s nullglob
+          scripts=(test/xboard/vectors/*_test.php)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo 'No PHP vector checks yet.'
+            exit 0
+          fi
+          php -r 'exit(function_exists("sodium_crypto_sign_detached") ? 0 : 1);'
+          for script in "${scripts[@]}"; do
+            echo "::group::$script"
+            php "$script"
+            echo '::endgroup::'
+          done
+
+  go-core:
+    name: Go core, managed probes and DIRECT broker race
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Checkout submodules
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Fetch CA certificates
+        run: |
+          set -euo pipefail
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+
+      - name: Apply the pinned managed probe carrier
+        run: |
+          set -euo pipefail
+          module=core/Clash.Meta
+          patch="$GITHUB_WORKSPACE/tool/xclient/patches/mihomo-managed-probes.patch"
+          expected=c5062921054902b25215a6a933e72ccd714c9bfa
+          test -f "$module/.git" || test -d "$module/.git"
+          test "$(git -C "$module" rev-parse --show-prefix)" = ""
+          test "$(git -C "$module" rev-parse HEAD)" = "$expected"
+          test "$(sed -n 's/^# XClient-Mihomo-Base: //p' "$patch" | tr -d '\r')" = "$expected"
+          if git -C "$module" apply --reverse --check "$patch" >/dev/null 2>&1; then
+            echo 'Managed probe carrier already applied'
+          else
+            git -C "$module" apply --check "$patch"
+            git -C "$module" apply "$patch"
+          fi
+          git -C "$module" apply --reverse --check "$patch"
+          test "$(git -C "$module" rev-parse HEAD)" = "$expected"
+          git -C "$module" diff --stat -- adapter/adapter.go adapter/patch.go
+
+      - name: Test Go core packages
+        working-directory: core
+        env:
+          CGO_ENABLED: '0'
+        run: go test -mod=readonly -count=1 ./...
+
+      - name: Test managed native probe policy and log delivery
+        working-directory: core
+        env:
+          CGO_ENABLED: '0'
+        run: go test -mod=readonly -tags=xclient -count=1 -run '^Test(ManagedProbe|LogPump)' .
+
+      - name: Vet shipping managed cores
+        working-directory: core
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          GOOS=windows GOARCH=amd64 go vet -p=2 -mod=readonly -tags=with_gvisor,xclient . ./cmd/...
+          GOOS=darwin GOARCH=arm64 go vet -p=2 -mod=readonly -tags=with_gvisor,xclient . ./cmd/...
+          GOOS=android GOARCH=arm64 go vet -p=2 -mod=readonly -tags=with_gvisor,xclient . ./mobile ./tun ./platform
+
+      - name: Race test DIRECT broker and TUN ownership
+        working-directory: core
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          gcc --version
+          go test -mod=readonly -race -count=1 direct_control_protocol.go direct_control_broker.go direct_control_broker_test.go direct_control_dial.go direct_control_dial_test.go
+          go test -mod=readonly -race -count=1 ./tun
+
+      - name: Compile the Go TLS component harness
+        working-directory: core
+        env:
+          CGO_ENABLED: '0'
+        run: go test -mod=readonly -c -o "$RUNNER_TEMP/xclient-direct-harness"
+
+      - name: Compile the managed regional failover harness
+        working-directory: core
+        env:
+          CGO_ENABLED: '0'
+        run: go test -mod=readonly -tags=xclient -c -o "$RUNNER_TEMP/xclient-native-failover-harness"
+
+      - name: Setup Flutter for the TLS component test
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install Dart component dependencies
+        run: |
+          flutter pub get --enforce-lockfile
+          yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
+
+      - name: Test Dart TLS against the real Go broker
+        run: |
+          XCLIENT_DIRECT_HARNESS="$RUNNER_TEMP/xclient-direct-harness" \
+            flutter test --no-pub test/xboard/integration/direct_control_test.dart --reporter expanded
+
+      - name: Test real Core traffic failure and same-region recovery
+        run: |
+          XC_FAILOVER_TEST_BINARY="$RUNNER_TEMP/xclient-native-failover-harness" \
+            flutter test --no-pub test/xboard/integration/native_failover_test.dart --reporter expanded
+
+  android-debug:
+    name: Android debug (example brand)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Prepare Android runner disk
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          for directory in /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc; do
+            if [ -d "$directory" ]; then sudo du -sh "$directory"; fi
+          done
+          sudo rm -rf -- /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # .gitmodules uses an SSH URL; fetch the public core over HTTPS instead.
+      - name: Checkout submodules
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Setup NDK
+        id: ndk
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1.6.0
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+          link-to-sdk: true
+
+      - name: Verify and share Android NDK
+        shell: bash
+        env:
+          XCLIENT_NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          ndk_revision="$(sed -n 's/^Pkg.Revision[[:space:]]*=[[:space:]]*//p' "$XCLIENT_NDK_PATH/source.properties" | tr -d '\r')"
+          required_revision="$(sed -n 's/^ndkVersion[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' android/gradle/libs.versions.toml)"
+          test -n "$required_revision"
+          if [ "$ndk_revision" != "$required_revision" ]; then
+            echo '::error::NDK action revision differs from the AGP pin'
+            exit 1
+          fi
+          if [ "$(realpath "${ANDROID_HOME:?}/ndk/$required_revision")" != "$(realpath "$XCLIENT_NDK_PATH")" ]; then
+            echo '::error::AGP SDK NDK and native-hook NDK are different installations'
+            exit 1
+          fi
+          for variable in ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_NDK_PATH ANDROID_NDK ANDROID_NDK_LATEST_HOME; do
+            printf '%s=%s\n' "$variable" "$XCLIENT_NDK_PATH" >> "$GITHUB_ENV"
+          done
+          printf 'Shared Android NDK revision: %s\n' "$ndk_revision"
+          df -h /
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Fetch CA certificates
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+
+      - name: Apply the example brand
+        run: dart tool/xclient/brand_apply.dart example --version 1.0.0-pre.1
+
+      - name: Build debug APK
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          XCLIENT_BRAND: example
+        run: |
+          flutter build apk --debug --target-platform android-arm64 \
+            --dart-define-from-file=xclient_defines.json --dart-define=APP_ENV=dev \
+            --dart-define=SAFE_MODE=true
+
+      - name: Test Android application unit tests
+        working-directory: android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          XCLIENT_BRAND: example
+        run: ./gradlew :app:testDebugUnitTest -Ptarget-platform=android-arm64
+
+      - name: Upload Android application test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: example-android-junit-results
+          path: build/app/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Android disk usage
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          df -h /
+          for directory in "$HOME/.rustup" "$HOME/.cargo" "${ANDROID_HOME:?}/ndk" "$RUNNER_TOOL_CACHE/ndk"; do
+            if [ -d "$directory" ]; then du -sh "$directory"; fi
+          done
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: example-android-debug
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 7
+
+  desktop-debug:
+    name: Desktop safe ${{ matrix.platform }} (example brand)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-2022
+            mode: profile
+          - platform: macos
+            os: macos-15
+            mode: debug
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Enable git long paths (Windows)
+        if: matrix.platform == 'windows'
+        run: git config --global core.longpaths true
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Checkout submodules
+        run: git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Xcode
+        if: matrix.platform == 'macos'
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app || sudo xcode-select -s /Applications/Xcode_26.2.app
+          xcodebuild -version
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Fetch CA certificates
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          if command -v sha256sum >/dev/null; then
+            echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+          else
+            echo "$CA_BUNDLE_SHA256  $bundle" | shasum -a 256 -c -
+          fi
+
+      - name: Apply the example brand
+        run: dart tool/xclient/brand_apply.dart example --version 1.0.0-pre.1
+
+      - name: Mark the safe macOS build for native rendering verification
+        if: matrix.platform == 'macos'
+        env:
+          XCLIENT_SAFE_MODE_BUILD: '1'
+        run: |
+          bash tool/xclient/ci/macos_safe_smoke.sh --prepare \
+            "$RUNNER_TEMP/xclient-macos-safe-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.stamp"
+
+      - name: Use the shipping macOS renderer
+        if: matrix.platform == 'macos'
+        run: plutil -replace FLTEnableImpeller -bool NO macos/Runner/Info.plist
+
+      - name: Build safe desktop bundle
+        run: |
+          flutter build ${{ matrix.platform }} --${{ matrix.mode }} \
+            --dart-define-from-file=xclient_defines.json --dart-define=APP_ENV=dev \
+            --dart-define=SAFE_MODE=true
+
+      - name: Package safe Windows profile bundle
+        if: matrix.platform == 'windows'
+        run: |
+          bundle=build/windows/x64/runner/Profile
+          test -d "$bundle"
+          mkdir -p out
+          tar --exclude='*.pdb' --exclude='*.ilk' -czf out/example-windows-safe-profile.tar.gz -C "$bundle" .
+
+      - name: Package safe macOS debug bundle
+        if: matrix.platform == 'macos'
+        run: |
+          products=build/macos/Build/Products/Debug
+          shopt -s nullglob
+          apps=("$products"/*.app)
+          if [ ${#apps[@]} -ne 1 ]; then
+            echo "::error::expected one debug .app, found ${#apps[@]}"
+            exit 1
+          fi
+          mkdir -p out
+          tar --exclude='*.dSYM' -czf out/example-macos-safe-debug.tar.gz -C "$products" "$(basename "${apps[0]}")"
+
+      - name: Upload safe desktop bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: example-${{ matrix.platform }}-safe-${{ matrix.mode }}
+          path: out/example-${{ matrix.platform }}-safe-${{ matrix.mode }}.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Capture the running safe macOS application
+        if: matrix.platform == 'macos'
+        env:
+          XCLIENT_SAFE_MODE_BUILD: '1'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(build/macos/Build/Products/Debug/*.app)
+          test "${#apps[@]}" -eq 1
+          bash tool/xclient/ci/macos_safe_smoke.sh "${apps[0]}" out/macos-safe-smoke \
+            "$RUNNER_TEMP/xclient-macos-safe-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.stamp"
+
+      - name: Upload macOS native rendering evidence
+        if: always() && matrix.platform == 'macos'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: example-macos-native-rendering
+          path: out/macos-safe-smoke/
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Test native storage launcher guards
+        run: python -m unittest discover -s tool/xclient/ci/tests -p test_native_store_smoke.py -v
+
+      - name: Prepare native storage verification
+        id: native_store_prepare
+        run: |
+          python tool/xclient/ci/native_store_smoke.py prepare --platform '${{ matrix.platform }}' \
+            --output "$GITHUB_WORKSPACE/out/native-store-${{ matrix.platform }}"
+
+      - name: Build the native storage QA target
+        run: |
+          flutter build '${{ matrix.platform }}' --${{ matrix.mode }} --no-pub \
+            --target=test/xboard/native/secure_store_app.dart \
+            --dart-define-from-file=out/native-store-${{ matrix.platform }}/defines.json
+
+      - name: Verify native secure storage and canonical identity
+        run: |
+          set -euo pipefail
+          if [ '${{ matrix.platform }}' = windows ]; then
+            bundle=build/windows/x64/runner/Profile
+          else
+            shopt -s nullglob
+            apps=(build/macos/Build/Products/Debug/*.app)
+            test "${#apps[@]}" -eq 1
+            bundle="${apps[0]}"
+          fi
+          python tool/xclient/ci/native_store_smoke.py run --platform '${{ matrix.platform }}' \
+            --state out/native-store-${{ matrix.platform }}/build.json --bundle "$bundle"
+
+      - name: Upload native storage verification evidence
+        if: always() && steps.native_store_prepare.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: example-native-store-${{ matrix.platform }}
+          path: |
+            out/native-store-${{ matrix.platform }}/result.json
+            out/native-store-${{ matrix.platform }}/runner-result.json
+            out/native-store-${{ matrix.platform }}/qa.png
+            out/native-store-${{ matrix.platform }}/build.json
+            out/native-store-${{ matrix.platform }}/launch.json
+          if-no-files-found: error
+          retention-days: 3
