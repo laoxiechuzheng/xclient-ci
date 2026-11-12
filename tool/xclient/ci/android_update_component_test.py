@@ -3,6 +3,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import time
@@ -255,6 +256,75 @@ class ComponentGuardTest(unittest.TestCase):
                 patch('builtins.print') as printed:
             self.assertEqual(component.main(), 1)
         self.assertEqual(json.loads(printed.call_args.args[0]), {'success': False, 'error': 'single_component_signer_required', 'signer': diagnostic})
+
+    def receipt_driver(self, outputs):
+        """A driver whose guest serves each receipt from its queue of reads."""
+        driver = component.ComponentDriver.__new__(component.ComponentDriver)
+        driver.pair, driver.guest, driver.relative = self.pair(), {'pid': 1234}, 'cache/xclient-update-qa-' + 'd' * 32
+        driver.report, driver.verify = {}, Mock()
+        calls = []
+
+        def call(*argv, **_):
+            calls.append(argv[0])
+            name = re.search(r'/([A-Za-z0-9-]+\.json) \]; then printf missing', argv[-1])[1]
+            queue = outputs.get(name, [b'missing'])
+            value = queue.pop(0) if len(queue) > 1 else queue[0]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        driver.device = Mock(call=Mock(side_effect=call))
+        return driver, calls
+
+    def hello(self):
+        value = component.control_lease(self.pair(), '1', 1234, 'prepare')
+        value.pop('action')
+        return value
+
+    def test_a_receipt_read_while_unreadable_is_retried_until_it_parses(self):
+        whole = component.encoded(self.hello())
+        driver, calls = self.receipt_driver({'hello-1.json': [b'missing', b'', whole[:7], whole]})
+        with patch.object(component.time, 'sleep'):
+            self.assertEqual(driver.wait('hello-1.json', '1'), self.hello())
+        self.assertEqual(driver.report, {'step': 'hello-1.json', 'receipt_invalid_reads': 2})
+        self.assertEqual(set(calls), {'shell'})
+
+    def test_a_receipt_that_stays_unparsable_fails_as_invalid_without_its_content(self):
+        secret = b'{"token": "PRIVATE-VALUE"'
+        driver, _ = self.receipt_driver({'hello-1.json': [secret]})
+        with patch.object(component.time, 'sleep'), self.assertRaisesRegex(component.qa.Refused, '^component_receipt_json_invalid$'):
+            driver.wait('hello-1.json', '1')
+        self.assertEqual(driver.report['receipt_failure'], {'file': 'hello-1.json', 'bytes': len(secret), 'attempts': component.INVALID_RECEIPT_READS})
+        self.assertNotIn('PRIVATE', json.dumps(driver.report))
+
+    def test_an_unparsable_receipt_at_the_deadline_is_invalid_not_a_timeout(self):
+        driver, _ = self.receipt_driver({'hello-1.json': [b'\xff\xfe']})
+        clock = [0.0]
+        with patch.object(component.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(component.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+                patch.object(component, 'INVALID_RECEIPT_READS', 100), \
+                self.assertRaisesRegex(component.qa.Refused, '^component_receipt_json_invalid$'):
+            driver.wait('hello-1.json', '1', timeout=1)
+        self.assertEqual(driver.report['receipt_failure'], {'file': 'hello-1.json', 'bytes': 2, 'attempts': 2})
+
+    def test_a_failed_guest_read_keeps_its_exit_status_instead_of_parsing_its_output(self):
+        for exit_code, code in ((3, 'component_receipt_not_regular'), (1, 'component_receipt_read_failed')):
+            with self.subTest(exit_code=exit_code):
+                driver, _ = self.receipt_driver({'hello-1.json': [component.qa.Refused('owned_command_failed', exit_code)]})
+                with self.assertRaisesRegex(component.qa.Refused, '^' + code + '$'):
+                    driver.wait('hello-1.json', '1')
+                self.assertEqual(driver.report['receipt_failure'], {'file': 'hello-1.json', 'exit_code': exit_code})
+
+    def test_the_component_step_reaches_the_run_receipt_when_the_driver_fails(self):
+        receipt = {}
+        driver = Mock(report={'step': 'hello-1.json'}, run=Mock(side_effect=ValueError('Expecting value')))
+        with tempfile.TemporaryDirectory() as directory, patch.object(component, 'ComponentDriver', return_value=driver):
+            output = Path(directory)
+            (output / 'receipts').mkdir()
+            with self.assertRaises(ValueError):
+                component.run_component(Mock(), {}, output, receipt)
+            self.assertEqual(receipt, {'component_step': 'hello-1.json'})
+            self.assertEqual(json.loads((output / 'receipts/component-result.json').read_text()), {'step': 'hello-1.json'})
 
     def test_paired_export_import_keeps_bytes_and_artifact_owner_separate(self):
         with tempfile.TemporaryDirectory() as folder:

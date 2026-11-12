@@ -1080,7 +1080,7 @@ def run(args):
         if state.get('purpose', 'lifecycle') == 'update-component':
             import android_update_component
             receipt['checkpoint'] = 'nativeUpdateComponent'
-            receipt['component'] = android_update_component.run_component(device, state, output)
+            receipt['component'] = android_update_component.run_component(device, state, output, receipt)
         else:
             verify_lifecycle(device, receipt)
         receipt['guest_network_unchanged'] = device.guest_network() == guest_before
@@ -1099,6 +1099,7 @@ def run(args):
             receipt['guest_ui_readiness'] = device.launcher_readiness
         receipt['emulator_identity_at_failure'] = dict(receipt['emulator_identity'])
         receipt['errors'].append(str(error) if isinstance(error, Refused) else type(error).__name__)
+        receipt['failed_checkpoint'] = receipt['checkpoint']
         try:
             if device is not None and receipt['device_verified'] and emulator_child.poll() is None and refresh_emulator_lease():
                 device.verify_owned()
@@ -1155,7 +1156,7 @@ def run(args):
         receipt['ui_lifecycle_acceptance_verified'] = state.get('purpose', 'lifecycle') == 'lifecycle' and acceptance and all(error == 'initial_activity_wait_timeout' for error in receipt['errors'])
         receipt['success'] = not receipt['errors'] and acceptance
         write_json(output / 'receipts/result.json', receipt)
-    print(json.dumps({'success': receipt['success'], 'errors': receipt['errors']}))
+    print(json.dumps({'success': receipt['success'], 'errors': receipt['errors'], **{key: receipt[key] for key in ('failed_checkpoint', 'component_step') if key in receipt}}))
     return 0 if receipt['success'] else 1
 
 

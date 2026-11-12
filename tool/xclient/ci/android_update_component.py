@@ -262,6 +262,17 @@ def import_pair(args):
     qa.write_json(output / 'receipts/build-origin.json', {'artifact_id': identity, **pair})
 
 
+# A receipt the guest renames into place is whole, so an unparsable read is
+# retried only a few times before it fails as itself rather than as missing.
+INVALID_RECEIPT_READS = 3
+
+
+class _ReceiptInvalid(Exception):
+    def __init__(self, size):
+        super().__init__('component_receipt_json_invalid')
+        self.size = size
+
+
 class ComponentDriver:
     def __init__(self, device, state, output):
         self.device, self.state, self.output = device, state, output
@@ -280,15 +291,47 @@ class ComponentDriver:
         qa.require(re.fullmatch(r'[A-Za-z0-9-]{1,80}\.json', name), 'component_receipt_name_required')
         self.verify()
         path = self.relative + '/' + name
-        script = 'if [ ! -e ' + path + ' ]; then printf missing; elif [ -f ' + path + ' ] && [ ! -L ' + path + ' ] && [ "$(wc -c < ' + path + ')" -le 16384 ]; then cat ' + path + '; else exit 1; fi'
-        raw = self.device.call('exec-out', 'run-as', PACKAGE, 'sh', '-c', shlex.quote(script))
+        script = 'if [ ! -e ' + path + ' ]; then printf missing; elif [ -f ' + path + ' ] && [ ! -L ' + path + ' ] && [ "$(wc -c < ' + path + ')" -le 16384 ]; then cat ' + path + '; else exit 3; fi'
+        # Not exec-out: it drops the guest exit status and mixes in stderr.
+        try:
+            raw = self.device.call('shell', 'run-as', PACKAGE, 'sh', '-c', shlex.quote(script))
+        except qa.Refused as error:
+            if error.exit_code is None:
+                raise
+            self.report['receipt_failure'] = {'file': name, 'exit_code': error.exit_code}
+            raise qa.Refused('component_receipt_not_regular' if error.exit_code == 3 else 'component_receipt_read_failed') from None
         qa.require(len(raw) <= 16384, 'bounded_component_receipt_required')
-        return None if raw == b'missing' else json.loads(raw.decode('utf-8'))
+        if raw == b'missing':
+            return None
+        try:
+            return json.loads(raw.decode('utf-8'))
+        except ValueError:
+            raise _ReceiptInvalid(len(raw)) from None
 
     def wait(self, name, stage, *, timeout=120):
+        self.report['step'] = name
         deadline = time.monotonic() + timeout
+        invalid = {}
+
+        def refuse_invalid(receipt):
+            attempts, size = invalid[receipt]
+            self.report['receipt_failure'] = {'file': receipt, 'bytes': size, 'attempts': attempts}
+            raise qa.Refused('component_receipt_json_invalid')
+
+        def read(receipt):
+            try:
+                value = self.read(receipt)
+            except _ReceiptInvalid as error:
+                invalid[receipt] = (invalid.get(receipt, (0, 0))[0] + 1, error.size)
+                self.report['receipt_invalid_reads'] = self.report.get('receipt_invalid_reads', 0) + 1
+                if invalid[receipt][0] >= INVALID_RECEIPT_READS or time.monotonic() >= deadline:
+                    refuse_invalid(receipt)
+                return None
+            invalid.pop(receipt, None)
+            return value
+
         while time.monotonic() < deadline:
-            failure = self.read('failure-' + stage + '.json')
+            failure = read('failure-' + stage + '.json')
             if failure is not None:
                 expected = control_lease(self.pair, stage, self.guest['pid'], 'prepare')
                 expected.pop('action')
@@ -297,15 +340,18 @@ class ComponentDriver:
                 qa.require(isinstance(failure, dict) and set(failure) == set(expected) | {'phase', 'error_class', 'synthetic_cleanup_confirmed'} and all(failure.get(k) == v for k, v in expected.items()) and failure.get('phase') in allowed_phases and failure.get('error_class') in allowed_errors and type(failure.get('synthetic_cleanup_confirmed')) is bool, 'native_component_failure_schema_required')
                 self.report['native_failure'] = {k: failure[k] for k in ('phase', 'error_class', 'synthetic_cleanup_confirmed')}
                 raise qa.Refused('native_component_stage_failed')
-            value = self.read(name)
+            value = read(name)
             if value is not None:
                 qa.require(time.monotonic() < deadline, 'component_receipt_timeout')
                 return value
             time.sleep(0.5)
+        for receipt in invalid:
+            refuse_invalid(receipt)
         raise qa.Refused('component_receipt_timeout')
 
     def stage_bytes(self, name, data):
         qa.require(name in ('v1.apk', 'v2.apk', 'lease-1.json', 'lease-2.json', 'arm-1.json'), 'component_control_name_required')
+        self.report['step'] = name
         self.verify()
         path = self.relative + '/' + name
         script = 'umask 077; test -d ' + self.relative + ' && test ! -L ' + self.relative + ' && test ! -e ' + path + ' && test ! -e ' + path + '.pending && cat > ' + path + '.pending && mv ' + path + '.pending ' + path
@@ -356,6 +402,7 @@ class ComponentDriver:
         return system_action(tree, activity, action, self.pair['stages']['1']['app_label'])
 
     def tap_system(self, action):
+        self.report['step'] = 'system-' + action
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             self.verify()
@@ -393,6 +440,7 @@ class ComponentDriver:
         self.device.call('shell', 'input', 'keyevent', 'KEYCODE_BACK')
 
     def await_v2_bytes(self):
+        self.report['step'] = 'v2-installed'
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             self.device.verify_owned()
@@ -453,11 +501,12 @@ class ComponentDriver:
         return self.report
 
 
-def run_component(device, state, output):
+def run_component(device, state, output, receipt):
     driver = ComponentDriver(device, state, output)
     try:
         return driver.run()
     finally:
+        receipt['component_step'] = driver.report.get('step')
         path = output / 'receipts/component-result.json'
         if not path.exists():
             qa.write_json(path, driver.report)
